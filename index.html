@@ -616,6 +616,270 @@ async function seedFromExcel() {
   }
 }
 
+
+// ===================== BREVO EMAIL LAYER =====================
+// Brevo key stored in localStorage only — never in source code
+function getBrevoKey() { return localStorage.getItem('brevo_key') || ''; }
+const BREVO_SENDER = {email: 'calliomed.info@gmail.com', name: 'Calliomed Planning'};
+const ADMIN_EMAIL  = 'melanie.cambier@calliomed.be';
+const AGENT_EMAILS = {
+  "baptiste": {
+    "email": "menendezbaptiste8@gmail.com",
+    "name": "Baptiste Menendez"
+  },
+  "manon": {
+    "email": "despontin.vet@gmail.com",
+    "name": "Manon Despontin"
+  },
+  "elodie_vanr": {
+    "email": "elodievanrapenbusch@gmail.com",
+    "name": "Elodie Vanrappenbusch"
+  },
+  "maryse": {
+    "email": "info@marysenicolas.be",
+    "name": "Maryse Nicolas"
+  },
+  "camille": {
+    "email": "camille.jns@icloud.com",
+    "name": "Camille Janssens"
+  },
+  "elodie_gran": {
+    "email": "elodiegrandjean@hotmail.com",
+    "name": "Elodie Grandjean"
+  },
+  "emeline": {
+    "email": "emeline.descendre@gmail.com",
+    "name": "Emeline Descendre"
+  },
+  "sabine": {
+    "email": "",
+    "name": "Sabine Lambert"
+  },
+  "admin": {
+    "email": "melanie.cambier@calliomed.be",
+    "name": "Mélanie Cambier"
+  }
+};
+
+function agentEmail(agentId) {
+  return AGENT_EMAILS[agentId] || {email:'', name: displayName(agentId)};
+}
+
+async function sendBrevoEmail(to, subject, htmlContent) {
+  if (!to || !to.email) { console.warn('No email for', to); return; }
+  const res = await fetch('https://api.brevo.com/v3/smtp/email', {
+    method: 'POST',
+    headers: {
+      'api-key': getBrevoKey(),
+      'Content-Type': 'application/json',
+      'Accept': 'application/json'
+    },
+    body: JSON.stringify({
+      sender: BREVO_SENDER,
+      to: [to],
+      subject,
+      htmlContent
+    })
+  });
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error('Brevo: ' + err);
+  }
+  return res.json();
+}
+
+// ── Email : demande de disponibilités (envoyé le 1er du mois) ──────────────
+async function sendDispoRequests() {
+  const MONTH_KEYS = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
+  const now = new Date();
+  const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+  const monthLabel = t(MONTH_KEYS[nextMonth.getMonth()]) + ' ' + nextMonth.getFullYear();
+  const deadline = new Date(nextMonth.getFullYear(), nextMonth.getMonth(), 10);
+  const deadlineStr = '10 ' + t(MONTH_KEYS[nextMonth.getMonth()]);
+  const appUrl = window.location.href.split('?')[0];
+
+  const agents = STATE.agents.filter(a => a.role !== 'admin');
+  let sent = 0, errors = 0;
+
+  for (const ag of agents) {
+    const contact = agentEmail(ag.id);
+    if (!contact.email) continue;
+    const html = `
+<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px">
+  <div style="background:#2563a8;padding:20px;border-radius:8px 8px 0 0">
+    <h1 style="color:#fff;margin:0;font-size:20px">🏥 Calliomed — Planning ${monthLabel}</h1>
+  </div>
+  <div style="background:#f8f9fa;padding:24px;border-radius:0 0 8px 8px;border:1px solid #e2e8f0">
+    <p style="font-size:15px">Bonjour <strong>${contact.name}</strong>,</p>
+    <p>Merci d'encoder vos disponibilités pour le mois de <strong>${monthLabel}</strong> avant le <strong>${deadlineStr}</strong>.</p>
+    <div style="text-align:center;margin:28px 0">
+      <a href="${appUrl}" style="background:#2563a8;color:#fff;padding:14px 32px;border-radius:8px;text-decoration:none;font-size:16px;font-weight:bold">
+        📅 Encoder mes disponibilités
+      </a>
+    </div>
+    <p style="font-size:13px;color:#666">Connectez-vous avec votre nom et votre mot de passe habituel, puis allez dans <strong>"Mes disponibilités"</strong>.</p>
+    <hr style="border:none;border-top:1px solid #e2e8f0;margin:20px 0">
+    <p style="font-size:12px;color:#999">Calliomed Planning — Ne pas répondre à cet email</p>
+  </div>
+</div>`;
+    try {
+      await sendBrevoEmail(contact, `Disponibilités ${monthLabel} — à encoder avant le ${deadlineStr}`, html);
+      sent++;
+    } catch(e) { errors++; console.error(e); }
+  }
+  showToast(`✉️ ${sent} email(s) envoyé(s)${errors?' — '+errors+' erreur(s)':''}`, errors?'error':'success');
+}
+
+// ── Email : planning personnel envoyé à chaque agent ──────────────────────
+async function sendPlanningToAgents() {
+  const MONTH_KEYS = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
+  const year  = STATE.viewMonth.getFullYear();
+  const month = STATE.viewMonth.getMonth();
+  const monthLabel = t(MONTH_KEYS[month]) + ' ' + year;
+  const SHIFT_LABELS = {S4:'00h–06h ★', S1:'06h–12h', S2:'12h–18h', S3:'18h–00h'};
+  const SHIFT_COLORS = {S4:'#6d28d9', S1:'#1d4ed8', S2:'#be185d', S3:'#065f46'};
+  const appUrl = window.location.href.split('?')[0];
+
+  const agents = STATE.agents.filter(a => a.role !== 'admin');
+  let sent = 0, errors = 0;
+
+  for (const ag of agents) {
+    const contact = agentEmail(ag.id);
+    if (!contact.email) continue;
+
+    // Get this agent's shifts for the month
+    const myShifts = Object.entries(STATE.assignments)
+      .flatMap(([key, assigns]) => {
+        const mine = assigns.filter(a => a.agent === ag.id);
+        if (!mine.length) return [];
+        const parts = key.split('_');
+        const shiftId = parts[parts.length-1];
+        const storedDate = parts.slice(0,-1).join('_');
+        const [sy,sm] = storedDate.split('-').map(Number);
+        if (sy !== year || sm !== month+1) return [];
+        // Display date: S4 = stored+1, others = stored
+        const displayDate = shiftId === 'S4'
+          ? toISO(new Date(new Date(storedDate+'T12:00:00').setDate(new Date(storedDate+'T12:00:00').getDate()+1)))
+          : storedDate;
+        return mine.map(a => ({displayDate, storedDate, shiftId, type: a.type}));
+      })
+      .sort((a,b) => a.displayDate.localeCompare(b.displayDate) ||
+        ['S4','S1','S2','S3'].indexOf(a.shiftId) - ['S4','S1','S2','S3'].indexOf(b.shiftId));
+
+    if (!myShifts.length) continue;
+
+    // Build shift rows HTML
+    const rows = myShifts.map(s => {
+      const d = new Date(s.displayDate + 'T12:00:00');
+      const dayNames = ['Dim','Lun','Mar','Mer','Jeu','Ven','Sam'];
+      const dateStr = dayNames[d.getDay()] + ' ' + d.getDate() + ' ' + t(MONTH_KEYS[d.getMonth()]);
+      const color = SHIFT_COLORS[s.shiftId] || '#333';
+      const label = SHIFT_LABELS[s.shiftId] || s.shiftId;
+      const typeBadge = s.type === 'doublon'
+        ? '<span style="background:#ede9fe;color:#6d28d9;padding:1px 6px;border-radius:4px;font-size:11px">doublon</span>'
+        : '';
+      return `<tr>
+        <td style="padding:8px 12px;border-bottom:1px solid #f0f0f0;font-size:14px">${dateStr}</td>
+        <td style="padding:8px 12px;border-bottom:1px solid #f0f0f0">
+          <span style="color:${color};font-weight:600;font-size:14px">${label}</span>
+          ${typeBadge}
+        </td>
+      </tr>`;
+    }).join('');
+
+    const html = `
+<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px">
+  <div style="background:#2563a8;padding:20px;border-radius:8px 8px 0 0">
+    <h1 style="color:#fff;margin:0;font-size:20px">🏥 Calliomed — Votre planning ${monthLabel}</h1>
+  </div>
+  <div style="background:#f8f9fa;padding:24px;border-radius:0 0 8px 8px;border:1px solid #e2e8f0">
+    <p style="font-size:15px">Bonjour <strong>${contact.name}</strong>,</p>
+    <p>Voici vos shifts attribués pour <strong>${monthLabel}</strong> :</p>
+    <table style="width:100%;border-collapse:collapse;background:#fff;border-radius:8px;overflow:hidden;border:1px solid #e2e8f0;margin:16px 0">
+      <thead>
+        <tr style="background:#2563a8">
+          <th style="padding:10px 12px;color:#fff;text-align:left;font-size:13px">Date</th>
+          <th style="padding:10px 12px;color:#fff;text-align:left;font-size:13px">Shift</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <p style="font-size:13px;color:#666">Total : <strong>${myShifts.filter(s=>s.type==='main').length} shift(s)</strong> dont <strong>${myShifts.filter(s=>s.shiftId==='S4').length} nuit(s)</strong>.</p>
+    <div style="text-align:center;margin:20px 0">
+      <a href="${appUrl}" style="background:#2563a8;color:#fff;padding:12px 28px;border-radius:8px;text-decoration:none;font-size:14px">
+        Voir mon planning en ligne
+      </a>
+    </div>
+    <hr style="border:none;border-top:1px solid #e2e8f0;margin:20px 0">
+    <p style="font-size:12px;color:#999">Calliomed Planning — Ne pas répondre à cet email</p>
+  </div>
+</div>`;
+
+    try {
+      await sendBrevoEmail(contact, `Votre planning ${monthLabel} — Calliomed`, html);
+      sent++;
+    } catch(e) { errors++; console.error(e); }
+  }
+
+  // Also notify admin
+  try {
+    await sendBrevoEmail(
+      {email: ADMIN_EMAIL, name: 'Mélanie Cambier'},
+      `Planning ${monthLabel} validé et envoyé aux agents`,
+      `<p>Le planning de ${monthLabel} a été validé et envoyé à ${sent} agent(s).</p>`
+    );
+  } catch(e) {}
+
+  showToast(`✉️ Planning envoyé à ${sent} agent(s)${errors?' — '+errors+' erreur(s)':''}`, errors?'error':'success');
+}
+
+// ── Email : notification rejet approuvé/refusé ─────────────────────────────
+async function notifyRequestResult(req, approved) {
+  const contact = agentEmail(req.agent);
+  if (!contact.email) return;
+  const SHIFT_LABELS = {S4:'00h–06h ★', S1:'06h–12h', S2:'12h–18h', S3:'18h–00h'};
+  const displayDate = req.shiftId === 'S4'
+    ? toISO(new Date(new Date(req.date+'T12:00:00').setDate(new Date(req.date+'T12:00:00').getDate()+1)))
+    : req.date;
+  const d = new Date(displayDate+'T12:00:00');
+  const MONTH_KEYS = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
+  const dateStr = d.getDate() + ' ' + t(MONTH_KEYS[d.getMonth()]) + ' ' + d.getFullYear();
+  const shiftLabel = SHIFT_LABELS[req.shiftId] || req.shiftId;
+  const appUrl = window.location.href.split('?')[0];
+
+  const subject = approved
+    ? `Demande approuvée — ${shiftLabel} du ${dateStr}`
+    : `Demande refusée — ${shiftLabel} du ${dateStr}`;
+
+  const color = approved ? '#15803d' : '#b91c1c';
+  const icon  = approved ? '✅' : '❌';
+  const msg   = approved
+    ? (req.type === 'reject'
+        ? `Votre demande de retrait du shift <strong>${shiftLabel}</strong> du <strong>${dateStr}</strong> a été <strong style="color:${color}">approuvée</strong>.`
+        : `Votre demande pour le shift <strong>${shiftLabel}</strong> du <strong>${dateStr}</strong> a été <strong style="color:${color}">approuvée</strong>.`)
+    : `Votre demande concernant le shift <strong>${shiftLabel}</strong> du <strong>${dateStr}</strong> a été <strong style="color:${color}">refusée</strong>. Contactez l'administrateur pour plus d'informations.`;
+
+  const html = `
+<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px">
+  <div style="background:${color};padding:20px;border-radius:8px 8px 0 0">
+    <h1 style="color:#fff;margin:0;font-size:18px">${icon} ${subject}</h1>
+  </div>
+  <div style="background:#f8f9fa;padding:24px;border-radius:0 0 8px 8px;border:1px solid #e2e8f0">
+    <p style="font-size:15px">Bonjour <strong>${contact.name}</strong>,</p>
+    <p style="font-size:14px">${msg}</p>
+    <div style="text-align:center;margin:20px 0">
+      <a href="${appUrl}" style="background:#2563a8;color:#fff;padding:12px 28px;border-radius:8px;text-decoration:none;font-size:14px">
+        Voir mon planning
+      </a>
+    </div>
+    <p style="font-size:12px;color:#999">Calliomed Planning — Ne pas répondre à cet email</p>
+  </div>
+</div>`;
+
+  try { await sendBrevoEmail(contact, subject, html); }
+  catch(e) { console.error('Email notification error:', e); }
+}
+
 // ===================== SUPABASE API LAYER =====================
 
 function sbHeaders() {
@@ -889,6 +1153,7 @@ async function seedAgents() {
 function renderSetup() {
   let url = STATE.supabaseUrl;
   let key = STATE.supabaseKey;
+  let brevoKey = localStorage.getItem('brevo_key') || '';
 
   return el('div', {class:'login-screen'},
     el('div', {class:'login-card', style:{width:'460px',maxWidth:'95vw'}},
@@ -919,12 +1184,23 @@ function renderSetup() {
           style:{width:'100%',padding:'8px 10px',border:'1px solid var(--border2)',borderRadius:'var(--radius)',fontSize:'13px'}
         })
       ),
+      el('div', {class:'field'},
+        el('label', {}, '✉️ Clé API Brevo (optionnelle — pour les emails)'),
+        el('input', {
+          type:'password',
+          placeholder:'xkeysib-...',
+          value: brevoKey ? '••••••••••••••••' : '',
+          onInput: e => brevoKey = e.target.value,
+          style:{width:'100%',padding:'8px 10px',border:'1px solid var(--border2)',borderRadius:'var(--radius)',fontSize:'13px',background:'var(--bg)',color:'var(--text)'}
+        })
+      ),
       el('button', {class:'btn btn-primary btn-full', style:{marginBottom:'10px'}, onClick: async () => {
         if (!url || !key) return;
         STATE.supabaseUrl = url.replace(/\/$/, '');
         STATE.supabaseKey = key;
         localStorage.setItem('sb_url', STATE.supabaseUrl);
         localStorage.setItem('sb_key', STATE.supabaseKey);
+        if (brevoKey && !brevoKey.includes('•')) localStorage.setItem('brevo_key', brevoKey);
         STATE.page = 'loading'; render();
         try {
           // First time: seed agents
@@ -1689,21 +1965,160 @@ function renderPlanning() {
   const days = getDaysInMonth(year, month);
   const SHIFTS = ['S4','S1','S2','S3'];
   const SHIFT_NAMES = {S4:'00h–06h ★',S1:'06h–12h',S2:'12h–18h',S3:'18h–00h'};
-  
-  // Get weeks
+  const SHIFT_COLORS_ADMIN = {
+    S4:{text:'var(--purple)',bg:'#faf5ff'},
+    S1:{text:'var(--accent)',bg:'#eff6ff'},
+    S2:{text:'#be185d',bg:'#fdf2f8'},
+    S3:{text:'var(--green)',bg:'#f0fdf4'},
+  };
+
+  // Split days into weeks (Mon-Sun)
   const weeks = [];
-  for (let i=0; i<days.length; i+=7) weeks.push(days.slice(i,i+7));
+  let week = [];
+  days.forEach(d => {
+    // Start new week on Monday (or first day of month)
+    if (d.getDay() === 1 && week.length > 0) {
+      weeks.push(week);
+      week = [];
+    }
+    week.push(d);
+  });
+  if (week.length > 0) weeks.push(week);
 
-  // Stats
-  const slots = getMonthSlots(year, month);
-  const totalSlots = slots.length;
-  const coveredSlots = slots.filter(s => getAssignments(s.date,s.shift_id).length > 0).length;
-  const uncoveredSlots = totalSlots - coveredSlots;
-  const nightSlots = slots.filter(s=>s.shift_id==='S4' && getAssignments(s.date,s.shift_id).length>0).length;
-
-  // Day-based grid view
   const prevMonth = () => { STATE.viewMonth = new Date(year, month-1, 1); render(); };
   const nextMonth = () => { STATE.viewMonth = new Date(year, month+1, 1); render(); };
+
+  const slots = getMonthSlots(year, month);
+  const totalSlots = slots.length;
+  const coveredSlots = slots.filter(s => getAssignments(storageDate(s.date,s.shift_id),s.shift_id).length > 0).length;
+  const uncoveredSlots = totalSlots - coveredSlots;
+  const nightSlots = Object.entries(STATE.assignments)
+    .filter(([k,v]) => { const [d] = k.split('_S4'); return k.includes('_S4') && d.startsWith(`${year}-${String(month+1).padStart(2,'0')}`); })
+    .reduce((n,[,v]) => n + v.length, 0);
+
+  const DAY_NAMES = ['dim','lun','mar','mer','jeu','ven','sam'];
+  const MONTH_KEYS = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
+
+  function renderWeek(weekDays) {
+    const weekLabel = `Semaine du ${weekDays[0].getDate()} ${t(MONTH_KEYS[weekDays[0].getMonth()])}`;
+
+    // Header row for this week
+    const header = el('div', {style:{
+      display:'grid',
+      gridTemplateColumns:`90px repeat(${weekDays.length}, 1fr)`,
+      background:'var(--bg)',
+      borderBottom:'1px solid var(--border)',
+      borderTop:'2px solid var(--border2)',
+      marginTop:'12px'
+    }},
+      el('div',{style:{padding:'5px 8px',fontSize:'10px',fontWeight:'600',color:'var(--text3)',
+        textTransform:'uppercase',letterSpacing:'0.5px',display:'flex',alignItems:'center'}},
+        weekLabel),
+      ...weekDays.map(d => {
+        const isWE = d.getDay()===0||d.getDay()===6;
+        const isToday = toISO(d) === toISO(new Date());
+        return el('div',{style:{
+          padding:'5px 4px', textAlign:'center',
+          background: isToday?'var(--accent-light)': isWE?'#f8f8f6':'transparent'
+        }},
+          el('div',{style:{fontSize:'10px',textTransform:'uppercase',letterSpacing:'0.4px',
+            color:isToday?'var(--accent)':isWE?'var(--accent)':'var(--text3)'
+          }}, DAY_NAMES[d.getDay()]),
+          el('div',{style:{
+            fontSize:'14px',fontWeight:'700',
+            width:'24px',height:'24px',borderRadius:'50%',
+            background:isToday?'var(--accent)':'transparent',
+            color:isToday?'#fff':isWE?'var(--accent)':'var(--text)',
+            display:'flex',alignItems:'center',justifyContent:'center',margin:'2px auto 0'
+          }}, String(d.getDate()))
+        );
+      })
+    );
+
+    // Shift rows
+    const shiftRows = SHIFTS.map(shiftId => {
+      const sc = SHIFT_COLORS_ADMIN[shiftId];
+      const isNight = shiftId === 'S4';
+      return el('div',{style:{
+        display:'grid',
+        gridTemplateColumns:`90px repeat(${weekDays.length}, 1fr)`,
+        borderBottom:'1px solid var(--border)',
+        minHeight:'44px'
+      }},
+        // Shift label
+        el('div',{style:{
+          padding:'4px 8px', display:'flex', alignItems:'center',
+          borderRight:'1px solid var(--border)',
+          background:sc.bg
+        }},
+          el('span',{style:{fontSize:'10px',fontWeight:'700',color:sc.text,letterSpacing:'0.3px'}},
+            SHIFT_NAMES[shiftId])
+        ),
+        // Day cells
+        ...weekDays.map(d => {
+          const dateStr = toISO(d);
+          const slot = STATE.availData?.slots[`${dateStr}_${shiftId}`];
+          const lookupDate = storageDate(dateStr, shiftId);
+          const isWE = d.getDay()===0||d.getDay()===6;
+          const isToday = dateStr === toISO(new Date());
+
+          if (!slot && !STATE.availData?.slots[`${lookupDate}_${shiftId}`]) {
+            return el('div',{style:{
+              borderRight:'1px solid var(--border)',
+              background:isWE?'#f8f8f6':'transparent'
+            }});
+          }
+
+          const assigns = getAssignments(lookupDate, shiftId);
+          const mainAssigns = assigns.filter(a=>a.type==='main');
+          const doublonAssigns = assigns.filter(a=>a.type==='doublon');
+
+          return el('div',{
+            style:{
+              padding:'2px 3px', borderRight:'1px solid var(--border)',
+              background:isToday?'#f8fbff':isWE?'#f8f8f6':'transparent',
+              cursor:'pointer', verticalAlign:'top', minHeight:'40px'
+            },
+            onClick: () => {STATE.modal={type:'assign',date:lookupDate,shiftId};render();}
+          },
+            mainAssigns.length > 0
+              ? mainAssigns.map(a => {
+                  const dispo = getAgentDispo(lookupDate, shiftId, a.agent);
+                  const bg = dispo==='preferred'?'var(--green-bg)':dispo==='maybe'?'var(--yellow-bg)':'var(--blue-bg)';
+                  const tc = dispo==='preferred'?'var(--green)':dispo==='maybe'?'var(--yellow)':'var(--accent)';
+                  const bd = dispo==='preferred'?'var(--green-border)':dispo==='maybe'?'var(--yellow-border)':'var(--blue-border)';
+                  const isConsec = hasConsecutive(a.agent, dateStr, shiftId);
+                  return el('div',{
+                    style:{background:bg,color:tc,borderRadius:'4px',padding:'2px 5px',
+                      fontSize:'10px',fontWeight:'500',marginBottom:'2px',
+                      border:`1px solid ${bd}`,display:'flex',alignItems:'center',gap:'2px'},
+                    title: displayName(a.agent)+(isConsec?' ⚠ consécutif':'')
+                  },
+                    displayName(a.agent).split(' ')[0].toLowerCase(),
+                    isConsec ? el('span',{style:{color:'var(--orange)',fontSize:'9px'}},'⚠') : null
+                  );
+                })
+              : el('div',{style:{
+                  color:'var(--red)',fontSize:'10px',padding:'2px 3px',
+                  border:'1px dashed var(--red-border)',borderRadius:'4px',
+                  background:'var(--red-bg)',textAlign:'center',margin:'2px'
+                }},'—'),
+            doublonAssigns.length > 0
+              ? doublonAssigns.map(a =>
+                  el('div',{style:{
+                    background:'var(--purple-bg)',color:'var(--purple)',
+                    borderRadius:'4px',padding:'1px 4px',fontSize:'9px',
+                    fontWeight:'500',border:'1px solid #c4b5fd',marginTop:'1px'
+                  }}, displayName(a.agent).split(' ')[0].toLowerCase()+'↻')
+                )
+              : null
+          );
+        })
+      );
+    });
+
+    return el('div',{}, header, ...shiftRows);
+  }
 
   return el('div', {},
     el('div', {class:'page-header'},
@@ -1712,9 +2127,13 @@ function renderPlanning() {
         el('div', {class:'page-subtitle'}, t('adminPanel'))
       ),
       el('div', {class:'header-actions'},
+        el('button',{class:'btn btn-secondary',style:{fontSize:'12px'},
+          onClick:()=>{sendDispoRequests().catch(e=>showToast('Erreur: '+e.message,'error'));}},'✉️ Demander dispos'),
         STATE.pendingStatus === 'draft' ? el('button',{class:'btn btn-secondary',onClick:autoGenerate},'⚡ '+t('generate')) : null,
         STATE.pendingStatus === 'draft' ? el('button',{class:'btn btn-secondary',onClick:()=>{STATE.pendingStatus='pending';showToast(t('pendingValidation'),'info');render();}},t('sendForValidation')) : null,
-        STATE.pendingStatus === 'pending' ? el('button',{class:'btn btn-success',onClick:()=>{STATE.pendingStatus='validated';showToast(t('validated'));render();}},t('validate')) : null,
+        STATE.pendingStatus === 'pending' ? el('button',{class:'btn btn-success',onClick:()=>{STATE.pendingStatus='validated';
+              sendPlanningToAgents().catch(e=>showToast('Erreur email: '+e.message,'error'));
+              showToast(t('validated'));render();}},t('validate')) : null,
         el('button',{class:'btn btn-secondary',onClick:exportCSV},'⬇ '+t('export'))
       )
     ),
@@ -1735,130 +2154,19 @@ function renderPlanning() {
       el('button',{class:'month-btn',onClick:nextMonth},'›')
     ),
 
-    // Legend
     el('div',{class:'legend'},
-      el('div',{class:'legend-item'},el('div',{class:'legend-dot',style:{background:'var(--green-bg)',border:'1px solid var(--green-border)'}}), t('preferred')),
-      el('div',{class:'legend-item'},el('div',{class:'legend-dot',style:{background:'var(--yellow-bg)',border:'1px solid var(--yellow-border)'}}), t('maybe')),
-      el('div',{class:'legend-item'},el('div',{class:'legend-dot',style:{background:'var(--red-bg)',border:'1px solid var(--red-border)'}}), t('unfilledWarning')),
-      el('div',{class:'legend-item'},el('div',{class:'legend-dot',style:{background:'var(--purple-bg)',border:'1px solid #c4b5fd'}}), t('overlapShift'))
+      el('div',{class:'legend-item'},el('div',{class:'legend-dot',style:{background:'var(--green-bg)',border:'1px solid var(--green-border)'}}),t('preferred')),
+      el('div',{class:'legend-item'},el('div',{class:'legend-dot',style:{background:'var(--yellow-bg)',border:'1px solid var(--yellow-border)'}}),t('maybe')),
+      el('div',{class:'legend-item'},el('div',{class:'legend-dot',style:{background:'var(--red-bg)',border:'1px solid var(--red-border)'}}),t('unfilledWarning')),
+      el('div',{class:'legend-item'},el('div',{class:'legend-dot',style:{background:'var(--purple-bg)',border:'1px solid #c4b5fd'}}),t('overlapShift'))
     ),
 
-    el('div', {class:'card', style:{padding:'0',overflowX:'auto'}},
-      // Table header
-      el('table', {style:{width:'100%',borderCollapse:'collapse',minWidth:'700px'}},
-        el('thead', {},
-          el('tr', {style:{borderBottom:'2px solid var(--border)'}},
-            el('th',{style:{padding:'10px 12px',textAlign:'left',fontSize:'11px',fontWeight:'600',color:'var(--text3)',textTransform:'uppercase',letterSpacing:'0.5px',width:'110px'}},'Shift'),
-            ...days.map(d => {
-              const isWE = d.getDay()===0||d.getDay()===6;
-              return el('th',{style:{padding:'8px 4px',textAlign:'center',fontSize:'11px',fontWeight:'600',color:isWE?'var(--accent)':'var(--text3)',background:isWE?'var(--accent-light)':'transparent',minWidth:'36px'}},
-                el('div',{},['dim','lun','mar','mer','jeu','ven','sam'][d.getDay()]),
-                el('div',{style:{fontSize:'13px',fontWeight:'700',color:isWE?'var(--accent)':'var(--text)'}},String(d.getDate()))
-              );
-            })
-          )
-        ),
-        el('tbody', {},
-          ...SHIFTS.map(shiftId => {
-            const isNight = shiftId === 'S4';
-            return el('tr', {style:{borderBottom:'1px solid var(--border)'}},
-              el('td',{style:{padding:'6px 12px',fontSize:'11px',fontWeight:'600',color:isNight?'var(--purple)':'var(--text2)',whiteSpace:'nowrap',borderRight:'1px solid var(--border)'}},
-                SHIFT_NAMES[shiftId]
-              ),
-              ...days.map(d => {
-                const dateStr = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-                const slot = STATE.availData?.slots[`${dateStr}_${shiftId}`];
-                if (!slot) return el('td',{style:{padding:'3px 2px',textAlign:'center',background:'var(--bg)'}});
-                
-                const lookupDate = storageDate(dateStr, shiftId);
-                const assigns = getAssignments(lookupDate, shiftId);
-                const isWE = d.getDay()===0||d.getDay()===6;
-                const mainAssigns = assigns.filter(a=>a.type==='main');
-                const doublonAssigns = assigns.filter(a=>a.type==='doublon');
-                
-                return el('td', {
-                  style:{padding:'3px 2px',textAlign:'center',cursor:'pointer',background:isWE?'#fafafa':'transparent',verticalAlign:'top',minWidth:'36px'},
-                  onClick: () => {STATE.modal={type:'assign',date:lookupDate,shiftId};render();}
-                },
-                  mainAssigns.length > 0 
-                    ? mainAssigns.map(a => {
-                        const dispo = getAgentDispo(lookupDate, shiftId, a.agent);
-                        const color = dispo==='preferred'?'var(--green-bg)':dispo==='maybe'?'var(--yellow-bg)':'var(--blue-bg)';
-                        const textColor = dispo==='preferred'?'var(--green)':dispo==='maybe'?'var(--yellow)':'var(--accent)';
-                        const isConsec = hasConsecutive(a.agent, dateStr, shiftId);
-                        return el('div',{
-                          style:{background:color,color:textColor,borderRadius:'4px',padding:'2px 4px',fontSize:'10px',fontWeight:'500',marginBottom:'2px',border:`1px solid ${dispo==='preferred'?'var(--green-border)':dispo==='maybe'?'var(--yellow-border)':'var(--blue-border)'}`,display:'flex',alignItems:'center',gap:'2px'},
-                          title: a.agent + (isConsec?' ⚠ consécutif':'')
-                        }, a.agent.split(' ')[0], isConsec?el('span',{},'⚠'):null);
-                      })
-                    : el('div',{style:{color:'var(--red)',fontSize:'10px',padding:'2px',border:'1px dashed var(--red-border)',borderRadius:'4px',background:'var(--red-bg)'}},'—'),
-                  doublonAssigns.length > 0 ? doublonAssigns.map(a =>
-                    el('div',{style:{background:'var(--purple-bg)',color:'var(--purple)',borderRadius:'4px',padding:'1px 3px',fontSize:'9px',fontWeight:'500',border:'1px solid #c4b5fd',marginTop:'1px'}},a.agent.split(' ')[0]+'↻')
-                  ) : null
-                );
-              })
-            );
-          })
-        )
-      )
+    el('div',{class:'card',style:{padding:'0 0 8px 0'}},
+      ...weeks.map(renderWeek)
     )
   );
 }
 
-// ===================== MY SHIFTS PAGE (AGENT) =====================
-
-// ===================== AGENT GRID VIEW HELPERS =====================
-
-// Ordered display: S4 first (night of THIS day), then S1, S2, S3, then SOV
-const SHIFT_DISPLAY_ORDER = ['S4','S1','S2','S3'];
-const SHIFT_COLORS = {
-  S4: {bg:'#ede9fe',border:'#c4b5fd',text:'#6d28d9', label:'00h–06h ★'},
-  S1: {bg:'#dbeafe',border:'#93c5fd',text:'#1d4ed8', label:'06h–12h'},
-  S2: {bg:'#fce7f3',border:'#f9a8d4',text:'#be185d', label:'12h–18h'},
-  S3: {bg:'#d1fae5',border:'#6ee7b7',text:'#065f46', label:'18h–00h'},
-};
-
-// Get the Monday of the week containing a given date
-function getMonday(date) {
-  const d = new Date(date);
-  const day = d.getDay(); // 0=Sun
-  const diff = (day === 0) ? -6 : 1 - day;
-  d.setDate(d.getDate() + diff);
-  d.setHours(0,0,0,0);
-  return d;
-}
-
-// Add N days to a date
-function addDays(date, n) {
-  const d = new Date(date);
-  d.setDate(d.getDate() + n);
-  return d;
-}
-
-function toISO(date) {
-  const y = date.getFullYear();
-  const m = String(date.getMonth()+1).padStart(2,'0');
-  const d = String(date.getDate()).padStart(2,'0');
-  return `${y}-${m}-${d}`;
-}
-
-// S4 (00h-06h) est la nuit du jour J-1 au jour J
-// On l'affiche sur la colonne J, mais on cherche les données sur J-1
-function storageDate(displayDate, shiftId) {
-  if (shiftId !== 'S4') return displayDate;
-  const d = new Date(displayDate + 'T12:00:00');
-  d.setDate(d.getDate() - 1);
-  return toISO(d);
-}
-
-// Get 4-week window starting from a given Monday
-function get4WeekDays(startMonday) {
-  const days = [];
-  for (let i = 0; i < 28; i++) days.push(addDays(startMonday, i));
-  return days;
-}
-
-// ===================== MY SHIFTS PAGE (AGENT) =====================
 function renderMyShifts() {
   // 4-week window: starts on Monday of viewWeek
   if (!STATE.viewWeekStart) {
@@ -2282,6 +2590,7 @@ function renderRequests() {
         removeAssignment(req.date, req.shiftId, req.agent);
         await dbRemoveAssignment(req.date, req.shiftId, req.agent);
       }
+      notifyRequestResult(req, true).catch(()=>{});
       showToast(t('requestApproved'));
       render();
     } catch(e) { showToast(e.message,'error'); }
@@ -2289,6 +2598,7 @@ function renderRequests() {
   const handleReject = async (req) => {
     try {
       await dbUpdateRequest(req.id, 'rejected');
+      notifyRequestResult(req, false).catch(()=>{});
       showToast(t('requestRejected'),'info');
       render();
     } catch(e) { showToast(e.message,'error'); }
@@ -2377,6 +2687,32 @@ function renderImport() {
         `${Object.keys(STATE.availData?.slots||{}).length} créneaux chargés pour ${STATE.availData?.agents?.length||0} agents.`),
       el('p',{style:{fontSize:'12px',color:'var(--text3)',marginTop:'6px'}},
         'Dates : Mai 2026 → Août 2026')
+    ),
+    el('div',{class:'card',style:{marginTop:'12px'}},
+      el('div',{class:'section-title'},'✉️ Configuration email (Brevo)'),
+      el('p',{style:{fontSize:'12px',color:'var(--text3)',marginBottom:'10px'}},
+        getBrevoKey() ? '✅ Clé Brevo configurée.' : '⚠️ Clé Brevo non configurée — emails désactivés.'),
+      el('div',{style:{display:'flex',gap:'8px',alignItems:'center',marginBottom:'12px'}},
+        el('input',{type:'password',placeholder:'xkeysib-... (nouvelle clé Brevo)',
+          id:'brevo-key-input',
+          style:{flex:'1',padding:'7px 10px',border:'1px solid var(--border2)',borderRadius:'var(--radius)',fontSize:'12px',background:'var(--bg)',color:'var(--text)'}}),
+        el('button',{class:'btn btn-primary',style:{fontSize:'11px'},onClick:()=>{
+          const val = document.getElementById('brevo-key-input').value.trim();
+          if(val){ localStorage.setItem('brevo_key',val); showToast('Clé Brevo sauvegardée ✓'); render(); }
+        }},'Sauvegarder')
+      ),
+      el('div',{class:'section-title',style:{marginTop:'8px'}},'Emails des agents'),
+      el('p',{style:{fontSize:'12px',color:'var(--text3)',marginBottom:'12px'}},'Adresses configurées pour les envois automatiques.'),
+      el('div',{},
+        ...STATE.agents.filter(a=>a.id!=='admin').map(ag => {
+          const info = AGENT_EMAILS[ag.id] || {email:'', name:ag.id};
+          return el('div',{style:{display:'flex',gap:'8px',alignItems:'center',marginBottom:'6px'}},
+            el('span',{style:{fontSize:'13px',minWidth:'180px',fontWeight:'500'}}, ag.display_name),
+            el('span',{style:{fontSize:'12px',color:info.email?'var(--text2)':'var(--red)'}},
+              info.email || '⚠️ Email manquant')
+          );
+        })
+      )
     ),
     el('div',{class:'card',style:{marginTop:'12px',borderColor:'var(--accent)',background:'var(--accent-light)'}},
       el('div',{class:'section-title',style:{color:'var(--accent)'}},'📥 Importer les données depuis les fichiers Excel'),
