@@ -1510,7 +1510,7 @@ function renderModal() {
       el('div', {class:'modal'},
         el('div', {class:'modal-title'}, t('rejectShift')),
         el('p', {style:{fontSize:'13px',color:'var(--text2)',marginBottom:'12px'}}, 
-          `${formatDate(m.date)} — ${shiftLabel(m.shiftId)}`),
+          `${formatDate(m.shiftId==='S4' ? toISO(addDays(new Date(m.date+'T12:00:00'),1)) : m.date)} — ${shiftLabel(m.shiftId)}`),
         el('div', {class:'field'},
           el('label', {}, t('rejectReason')),
           el('input', {type:'text', placeholder:'...', onInput: e => reason = e.target.value, style:{width:'100%',padding:'8px 10px',border:'1px solid var(--border2)',borderRadius:'var(--radius)',fontSize:'13px'}})
@@ -1770,18 +1770,19 @@ function renderPlanning() {
                 const slot = STATE.availData?.slots[`${dateStr}_${shiftId}`];
                 if (!slot) return el('td',{style:{padding:'3px 2px',textAlign:'center',background:'var(--bg)'}});
                 
-                const assigns = getAssignments(dateStr, shiftId);
+                const lookupDate = storageDate(dateStr, shiftId);
+                const assigns = getAssignments(lookupDate, shiftId);
                 const isWE = d.getDay()===0||d.getDay()===6;
                 const mainAssigns = assigns.filter(a=>a.type==='main');
                 const doublonAssigns = assigns.filter(a=>a.type==='doublon');
                 
                 return el('td', {
                   style:{padding:'3px 2px',textAlign:'center',cursor:'pointer',background:isWE?'#fafafa':'transparent',verticalAlign:'top',minWidth:'36px'},
-                  onClick: () => {STATE.modal={type:'assign',date:dateStr,shiftId};render();}
+                  onClick: () => {STATE.modal={type:'assign',date:lookupDate,shiftId};render();}
                 },
                   mainAssigns.length > 0 
                     ? mainAssigns.map(a => {
-                        const dispo = getAgentDispo(dateStr, shiftId, a.agent);
+                        const dispo = getAgentDispo(lookupDate, shiftId, a.agent);
                         const color = dispo==='preferred'?'var(--green-bg)':dispo==='maybe'?'var(--yellow-bg)':'var(--blue-bg)';
                         const textColor = dispo==='preferred'?'var(--green)':dispo==='maybe'?'var(--yellow)':'var(--accent)';
                         const isConsec = hasConsecutive(a.agent, dateStr, shiftId);
@@ -1839,6 +1840,15 @@ function toISO(date) {
   const m = String(date.getMonth()+1).padStart(2,'0');
   const d = String(date.getDate()).padStart(2,'0');
   return `${y}-${m}-${d}`;
+}
+
+// S4 (00h-06h) est la nuit du jour J-1 au jour J
+// On l'affiche sur la colonne J, mais on cherche les données sur J-1
+function storageDate(displayDate, shiftId) {
+  if (shiftId !== 'S4') return displayDate;
+  const d = new Date(displayDate + 'T12:00:00');
+  d.setDate(d.getDate() - 1);
+  return toISO(d);
 }
 
 // Get 4-week window starting from a given Monday
@@ -1967,8 +1977,9 @@ function renderMyShifts() {
           // Day cells
           ...weekDays.map(d => {
             const dateStr = toISO(d);
-            const key = `${dateStr}_${shiftId}`;
-            const assigns = getAssignments(dateStr, shiftId);
+            const lookupDate = storageDate(dateStr, shiftId);
+            const key = `${lookupDate}_${shiftId}`;
+            const assigns = getAssignments(lookupDate, shiftId);
             const myAssign = assigns.find(a => a.agent === STATE.user);
             const isWE = d.getDay()===0||d.getDay()===6;
             const isToday = dateStr === today;
@@ -2016,7 +2027,7 @@ function renderMyShifts() {
                   fontSize:'10px', color:'#15803d', cursor:'pointer'
                 },
                 onClick: ()=>{
-                  dbAddRequest('claim',STATE.user,dateStr,shiftId).then(()=>{showToast(t('requestSent'),'info');render();}).catch(e=>showToast(e.message,'error'));
+                  dbAddRequest('claim',STATE.user,storageDate(dateStr,shiftId),shiftId).then(()=>{showToast(t('requestSent'),'info');render();}).catch(e=>showToast(e.message,'error'));
                 }
               }, '+ Disponible');
             }
@@ -2128,12 +2139,13 @@ function renderAvailableShifts() {
   days.forEach(d => {
     const dateStr = toISO(d);
     SHIFT_DISPLAY_ORDER.forEach(shiftId => {
-      const key = `${dateStr}_${shiftId}`;
+      const lookupDate = storageDate(dateStr, shiftId);
+      const key = `${lookupDate}_${shiftId}`;
       if (!STATE.availData?.slots[key]) return;
-      const assigns = getAssignments(dateStr, shiftId);
+      const assigns = getAssignments(lookupDate, shiftId);
       const myAssign = assigns.find(a => a.agent === STATE.user);
       if (!myAssign && assigns.length === 0) {
-        available.push({date: dateStr, shiftId, dispo: getAgentDispo(dateStr, shiftId, STATE.user)});
+        available.push({date: dateStr, shiftId, lookupDate, dispo: getAgentDispo(lookupDate, shiftId, STATE.user)});
       }
     });
   });
@@ -2166,7 +2178,9 @@ function renderAvailableShifts() {
             const isPending = pendingClaims.has(`${s.date}_${s.shiftId}`);
             const myDispo = s.dispo;
             return el('div',{class:'shift-row available', style:{borderLeft:`3px solid ${sc.border}`}},
-              el('div',{class:'shift-date'},formatDate(s.date)),
+              el('div',{class:'shift-date'},formatDate(
+                s.shiftId==='S4' ? toISO(addDays(new Date(s.date+'T12:00:00'),1)) : s.date
+              )),
               el('div',{class:'shift-time',style:{color:sc.text}}, sc.label),
               el('div',{},
                 myDispo === 'preferred' ? badge('green', '✓ Vous êtes disponible') :
