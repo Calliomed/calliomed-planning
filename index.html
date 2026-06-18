@@ -1089,16 +1089,38 @@ function renderAvailabilityInput() {
         // Shift rows
         ...SHIFT_ORDER.map(shiftId => {
           const sc = SHIFT_COLORS_DISPO[shiftId];
+          const DOUBLON_COLOR = {bg:'#f5f3ff',border:'#c4b5fd',text:'#6d28d9'};
+
+          function getCurrentDoublon(date) {
+            const k = `${STATE.user}_${date}_${shiftId}`;
+            return STATE.availability[k]?.doublon || 'unavailable';
+          }
+          function cycleDoublon(date) {
+            const current = getCurrentDoublon(date);
+            const idx = DISPO_OPTS.findIndex(o => o.val === current);
+            const next = DISPO_OPTS[(idx+1) % DISPO_OPTS.length].val;
+            const k = `${STATE.user}_${date}_${shiftId}`;
+            STATE.availability[k] = {
+              dispo: STATE.availability[k]?.dispo || 'unavailable',
+              doublon: next
+            };
+            if (!STATE.dispoEdits[`${date}_${shiftId}`])
+              STATE.dispoEdits[`${date}_${shiftId}`] = {dispo: STATE.availability[k].dispo, doublon: next};
+            else
+              STATE.dispoEdits[`${date}_${shiftId}`].doublon = next;
+            render();
+          }
+
           return [
-            // Shift label
+            // ── Main shift label
             el('div',{style:{
               padding:'4px 6px', display:'flex', alignItems:'center',
               background:sc.bg, borderRight:'1px solid var(--border)',
-              borderBottom:'1px solid var(--border)'
+              borderBottom:'none'
             }},
               el('span',{style:{fontSize:'10px',fontWeight:'700',color:sc.text}}, sc.label)
             ),
-            // Day cells
+            // ── Main shift day cells
             ...days.map(d => {
               const dateStr = toISO(d);
               const dispo = getCurrentDispo(dateStr, shiftId);
@@ -1107,7 +1129,7 @@ function renderAvailabilityInput() {
               const isWE = d.getDay()===0||d.getDay()===6;
               return el('div',{
                 style:{
-                  padding:'3px 2px', borderBottom:'1px solid var(--border)',
+                  padding:'3px 2px 1px 2px',
                   borderRight:'1px solid var(--border)',
                   background:isWE?'#fafafa':'transparent'
                 },
@@ -1118,8 +1140,39 @@ function renderAvailabilityInput() {
                   background:opt.bg, border:`1px solid ${isEdited?'#7c3aed':opt.border}`,
                   cursor:'pointer', fontSize:'9px', fontWeight:'500', color:opt.text,
                   outline: isEdited?'2px solid #7c3aed':'none',
-                  minHeight:'22px', display:'flex', alignItems:'center', justifyContent:'center'
-                }}, opt.label.split(' ')[0])  // just the icon: ✓ ? ~ ✗
+                  minHeight:'20px', display:'flex', alignItems:'center', justifyContent:'center'
+                }}, opt.label.split(' ')[0])
+              );
+            }),
+            // ── Doublon 19h-21h label
+            el('div',{style:{
+              padding:'2px 6px 4px 10px', display:'flex', alignItems:'center',
+              background:DOUBLON_COLOR.bg, borderRight:'1px solid var(--border)',
+              borderBottom:'1px solid var(--border)'
+            }},
+              el('span',{style:{fontSize:'9px',fontWeight:'600',color:DOUBLON_COLOR.text}}, '↻ 19h–21h')
+            ),
+            // ── Doublon day cells
+            ...days.map(d => {
+              const dateStr = toISO(d);
+              const doublon = getCurrentDoublon(dateStr);
+              const opt = DISPO_OPTS.find(o=>o.val===doublon) || DISPO_OPTS[3];
+              const isWE = d.getDay()===0||d.getDay()===6;
+              return el('div',{
+                style:{
+                  padding:'1px 2px 3px 2px', borderBottom:'1px solid var(--border)',
+                  borderRight:'1px solid var(--border)',
+                  background:isWE?'#fafafa':'transparent'
+                },
+                onClick: () => cycleDoublon(dateStr)
+              },
+                el('div',{style:{
+                  borderRadius:'4px', padding:'2px 3px', textAlign:'center',
+                  background:opt.bg, border:`1px solid ${opt.border}`,
+                  cursor:'pointer', fontSize:'9px', fontWeight:'500', color:opt.text,
+                  minHeight:'18px', display:'flex', alignItems:'center', justifyContent:'center',
+                  opacity:'0.85'
+                }}, opt.label.split(' ')[0])
               );
             })
           ];
