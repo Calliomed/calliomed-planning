@@ -2804,7 +2804,7 @@ function renderChangePassword() {
 function render() {
   const root = document.getElementById('app');
   root.innerHTML = '';
-
+  try {
   if (STATE.page === 'setup')   { root.appendChild(renderSetup()); return; }
   if (STATE.page === 'loading') { root.appendChild(renderLoadingScreen()); return; }
   if (STATE.page === 'login')   { root.appendChild(renderLogin()); return; }
@@ -2836,6 +2836,22 @@ function render() {
   }
 
   root.appendChild(app);
+  } catch(err) {
+    console.error('Render error:', err);
+    root.innerHTML = `
+      <div style="padding:40px;font-family:sans-serif;max-width:600px;margin:40px auto">
+        <h2 style="color:#b91c1c">⚠️ Erreur de chargement</h2>
+        <p style="color:#555;margin:12px 0">Une erreur s'est produite. Détails :</p>
+        <pre style="background:#fee2e2;padding:16px;border-radius:8px;font-size:12px;overflow:auto;color:#b91c1c">${err.message}
+${err.stack||''}</pre>
+        <button onclick="location.reload()" style="margin-top:16px;padding:10px 20px;background:#2563a8;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px">
+          🔄 Recharger la page
+        </button>
+        <button onclick="localStorage.clear();location.reload()" style="margin-top:16px;margin-left:8px;padding:10px 20px;background:#fee2e2;color:#b91c1c;border:1px solid #fca5a5;border-radius:6px;cursor:pointer;font-size:14px">
+          🗑️ Effacer config et recharger
+        </button>
+      </div>`;
+  }
 }
 
 // ===================== INIT =====================
