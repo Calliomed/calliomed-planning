@@ -1101,8 +1101,10 @@ async function silentRefresh() {
     const avail = await sbGet('availability', 'order=date,shift_id&limit=50000');
     // Only overwrite availability if agent has no pending unsaved edits
     // Otherwise the refresh would erase their in-progress work
+    // Never overwrite availability during or right after a save
     const hasPendingEdits = Object.keys(STATE.dispoEdits || {}).length > 0;
-    if (!hasPendingEdits) {
+    const justSaved = STATE.lastSaveTime && (Date.now() - STATE.lastSaveTime < 60000);
+    if (!hasPendingEdits && !justSaved) {
       STATE.availability = {};
       avail.forEach(row => {
         STATE.availability[`${row.agent_id}_${row.date}_${row.shift_id}`] = {
@@ -1832,10 +1834,18 @@ async function saveAll() {
           body: JSON.stringify(row)
         }
       );
+      const responseText = await r.text();
+      console.log('[saveAll] response:', r.status, r.statusText, responseText.substring(0, 200));
       if (!r.ok) {
-        const errText = await r.text();
-        firstErr = `HTTP ${r.status}: ${errText}`;
+        firstErr = `HTTP ${r.status}: ${responseText}`;
         console.error('Save error for', key, firstErr);
+        break;
+      }
+      // Verify the save actually worked by checking response
+      // Supabase returns 201 for insert, 200 for update with merge-duplicates
+      if (r.status !== 200 && r.status !== 201 && r.status !== 204) {
+        firstErr = `Statut inattendu ${r.status}: ${responseText}`;
+        console.error('Unexpected status for', key, firstErr);
         break;
       }
       STATE.availability[`${STATE.user}_${date}_${shiftId}`] = {dispo: row[0].dispo, doublon: row[0].doublon};
@@ -1847,6 +1857,7 @@ async function saveAll() {
     } else {
       await trackDispoUpdate(STATE.user, saved).catch(()=>{});
       STATE.dispoEdits = {};
+      STATE.lastSaveTime = Date.now();
       showToast(`✓ ${saved} disponibilité(s) enregistrée(s)`);
     }
     render();
