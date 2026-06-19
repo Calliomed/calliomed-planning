@@ -2077,21 +2077,34 @@ function renderModal() {
         el('p', {style:{fontSize:'12px',color:'var(--text3)',marginBottom:'10px'}}, t('generateInfo')),
         
         el('div', {class:'agent-grid'},
-          ...agents.map(ag => {
+          ...[...agents].sort((a,b) => {
+            // Sort: assigned first, then available (preferred/maybe), then ask, then unavailable
+            const assigned_a = current.some(x=>x.agent===a.name) ? 0 : 1;
+            const assigned_b = current.some(x=>x.agent===b.name) ? 0 : 1;
+            if (assigned_a !== assigned_b) return assigned_a - assigned_b;
+            const prio = {preferred:0, maybe:1, ask:2, unavailable:3};
+            return (prio[a.dispo]||3) - (prio[b.dispo]||3);
+          }).map(ag => {
             const isAssigned = current.some(a => a.agent === ag.name && a.type === 'main');
             const isUnavail = ag.dispo === 'unavailable';
             const isConsec = hasConsecutive(ag.name, m.date, m.shiftId);
-            const cls = `agent-option${isAssigned?' selected':''}${isUnavail?' unavailable':''} ${ag.dispo}`;
+            // Admin can always assign/remove any agent regardless of availability
+            const cls = `agent-option${isAssigned?' selected':''} ${ag.dispo}`;
             return el('div', {
               class: cls,
+              style: isUnavail && !isAssigned ? {opacity:'0.5'} : {},
               onClick: () => {
-                if (isUnavail) return;
+                // Admin can always click — no restriction
                 if (isAssigned) { removeAssignment(m.date, m.shiftId, ag.name); dbRemoveAssignment(m.date, m.shiftId, ag.name).catch(e=>showToast(e.message,'error')); }
                 else { setAssignment(m.date, m.shiftId, ag.name); dbSetAssignment(m.date, m.shiftId, ag.name).catch(e=>showToast(e.message,'error')); }
                 render();
               }
             },
-              el('div', {class:'agent-name'}, displayName(ag.name), isConsec ? el('span',{style:{color:'var(--orange)',fontSize:'10px',marginLeft:'4px'}},' ⚠ consécutif') : null),
+              el('div', {class:'agent-name'},
+                displayName(ag.name),
+                isConsec ? el('span',{style:{color:'var(--orange)',fontSize:'10px',marginLeft:'4px'}},' ⚠ consécutif') : null,
+                isUnavail ? el('span',{style:{color:'var(--text3)',fontSize:'10px',marginLeft:'4px'}},' (indispo)') : null
+              ),
               el('div', {class:'agent-dispo'},
                 el('span', {class:`badge badge-${dispoColor(ag.dispo)}`}, dispoLabel(ag.dispo)),
                 ag.doublon && ag.doublon !== 'unknown' ? el('span',{class:`badge badge-${dispoColor(ag.doublon)}`,style:{marginLeft:'4px',fontSize:'10px'}}, '19-21h') : null
