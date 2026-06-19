@@ -3315,160 +3315,209 @@ function renderMyShifts() {
   const periodLabel = `${weekStart.getDate()} ${t(MONTH_KEYS[weekStart.getMonth()])} – ${endDay.getDate()} ${t(MONTH_KEYS[endDay.getMonth()])} ${endDay.getFullYear()}`;
 
   // ── Build grid ────────────────────────────────────────────────────────────
-  function buildGrid() {
-    const weeks = [];
-    for (let w = 0; w < 4; w++) {
-      weeks.push(days.slice(w*7, w*7+7));
-    }
 
-    // Header row: day names + dates
-    const headerCells = [
-      el('div', {style:{
-        display:'grid',
-        gridTemplateColumns:'72px repeat(7,1fr)',
-        borderBottom:'2px solid var(--border)',
-        background:'var(--bg)',
-        position:'sticky', top:0, zIndex:2
+  // Auto-detect mobile
+  const isMobile = window.innerWidth < 700;
+
+  // Build proper calendar weeks (Mon-Sun) for the 4-week period
+  function buildGrid() {
+    const SHIFT_COLORS_GRID = {
+      S4:{bg:'#ede9fe',border:'#c4b5fd',text:'#6d28d9',label:'00h–06h ★'},
+      S1:{bg:'#dbeafe',border:'#93c5fd',text:'#1d4ed8',label:'06h–12h'},
+      S2:{bg:'#fce7f3',border:'#f9a8d4',text:'#be185d',label:'12h–18h'},
+      S3:{bg:'#d1fae5',border:'#6ee7b7',text:'#065f46',label:'18h–00h'},
+    };
+    const DAY_N_G = ['dim','lun','mar','mer','jeu','ven','sam'];
+
+    // Split days into proper Mon-Sun weeks
+    const weeks_g = [];
+    let wtmp_g = [];
+    days.forEach(d => {
+      if (d.getDay()===1 && wtmp_g.length>0) { weeks_g.push(wtmp_g); wtmp_g=[]; }
+      wtmp_g.push(d);
+    });
+    if (wtmp_g.length>0) weeks_g.push(wtmp_g);
+
+    function buildWeekGrid(weekDays) {
+      const wlabel = `Semaine du ${weekDays[0].getDate()} ${t(MONTH_KEYS[weekDays[0].getMonth()])}`;
+      const isWE_g = d => d.getDay()===0||d.getDay()===6;
+
+      const hdr = el('div',{style:{
+        display:'grid', gridTemplateColumns:`72px repeat(${weekDays.length},1fr)`,
+        background:'var(--bg)', borderBottom:'1px solid var(--border)',
+        borderTop:'2px solid var(--border2)', marginTop:'10px'
       }},
-        el('div', {style:{padding:'8px',fontSize:'10px',fontWeight:'600',color:'var(--text3)',textTransform:'uppercase'}},'SHIFT'),
-        ...weeks[0].map(d => {
-          const dayNames = ['dim','lun','mar','mer','jeu','ven','sam'];
-          const isToday = toISO(d) === today;
-          const isWE = d.getDay()===0||d.getDay()===6;
-          return el('div', {style:{
-            padding:'6px 4px', textAlign:'center',
-            background: isToday ? 'var(--accent-light)' : isWE ? '#f8f8f6' : 'transparent'
+        el('div',{style:{padding:'5px 8px',fontSize:'10px',fontWeight:'600',
+          color:'var(--text3)',textTransform:'uppercase',letterSpacing:'0.5px'}}, wlabel),
+        ...weekDays.map(d => {
+          const isToday_g = toISO(d) === toISO(new Date());
+          return el('div',{style:{
+            padding:'5px 2px',textAlign:'center',
+            background:isToday_g?'var(--accent-light)':isWE_g(d)?'#f8f8f6':'transparent'
           }},
-            el('div',{style:{fontSize:'10px',textTransform:'uppercase',letterSpacing:'0.5px',color:isToday?'var(--accent)':isWE?'var(--accent)':'var(--text3)'
-            }}, dayNames[d.getDay()]),
-            el('div',{style:{fontSize:'14px',fontWeight:'700',color:isToday?'var(--accent)':'var(--text)',
-              width:'24px',height:'24px',borderRadius:'50%',
-              background:isToday?'var(--accent)':'transparent',
-              color:isToday?'#fff':'var(--text)',
+            el('div',{style:{fontSize:'9px',textTransform:'uppercase',
+              color:isToday_g?'var(--accent)':isWE_g(d)?'var(--accent)':'var(--text3)'}},
+              DAY_N_G[d.getDay()]),
+            el('div',{style:{
+              fontSize:'13px',fontWeight:'700',
+              width:'22px',height:'22px',borderRadius:'50%',
+              background:isToday_g?'var(--accent)':'transparent',
+              color:isToday_g?'#fff':isWE_g(d)?'var(--accent)':'var(--text)',
               display:'flex',alignItems:'center',justifyContent:'center',margin:'2px auto 0'
             }}, String(d.getDate()))
           );
         })
-      )
-    ];
-
-    const weekGrids = weeks.map((weekDays, wi) => {
-      // Month label row if new month starts in this week
-      const monthLabel = wi === 0 || weekDays[0].getMonth() !== weeks[wi-1][6].getMonth()
-        ? null : null;
+      );
 
       const shiftRows = SHIFT_DISPLAY_ORDER.map(shiftId => {
-        const sc = SHIFT_COLORS[shiftId];
-        return el('div', {style:{
-          display:'grid',
-          gridTemplateColumns:'72px repeat(7,1fr)',
-          borderBottom:`1px solid var(--border)`,
-          minHeight:'48px'
+        const sc = SHIFT_COLORS_GRID[shiftId];
+        return el('div',{style:{
+          display:'grid', gridTemplateColumns:`72px repeat(${weekDays.length},1fr)`,
+          borderBottom:'1px solid var(--border)', minHeight:'44px'
         }},
-          // Shift label cell
-          el('div', {style:{
-            padding:'4px 6px', display:'flex', flexDirection:'column',
-            justifyContent:'center', borderRight:'1px solid var(--border)',
-            background:sc.bg
-          }},
-            el('span',{style:{fontSize:'10px',fontWeight:'700',color:sc.text,letterSpacing:'0.3px'}}, sc.label),
-            el('span',{style:{fontSize:'9px',color:sc.text,opacity:'0.7',marginTop:'1px'}},
-              (shiftId==='S4'||shiftId==='S2') ? 'Agent 1' : 'Agent 2'
-            )
+          el('div',{style:{padding:'4px 6px',display:'flex',flexDirection:'column',
+            justifyContent:'center',borderRight:'1px solid var(--border)',background:sc.bg}},
+            el('span',{style:{fontSize:'9px',fontWeight:'700',color:sc.text}}, sc.label)
           ),
-          // Day cells
           ...weekDays.map(d => {
             const dateStr = toISO(d);
             const lookupDate = storageDate(dateStr, shiftId);
             const key = `${lookupDate}_${shiftId}`;
             const assigns = getAssignments(lookupDate, shiftId);
             const myAssign = assigns.find(a => a.agent === STATE.user);
-            const isWE = d.getDay()===0||d.getDay()===6;
-            const isToday = dateStr === today;
-            const isPendingReject = pendingRejects.has(key);
-            const slotExists = !!STATE.availData?.slots[key];
+            const isWE_g = d.getDay()===0||d.getDay()===6;
+            const isToday_g = dateStr === toISO(new Date());
+            const isPR = pendingRejects.has(key);
+            const slotExists = !!STATE.availData?.slots[key] || assigns.length > 0;
 
-            if (!slotExists) {
-              return el('div',{style:{background:isWE?'#f8f8f6':'transparent', borderRight:'1px solid var(--border)'}});
-            }
-
-            let cellContent;
-            if (myAssign) {
-              // Assigned to me
-              const label = myAssign.type === 'doublon' ? '↻ doublon' : '✓ Moi';
-              cellContent = el('div', {
-                style:{
-                  margin:'3px', padding:'3px 5px', borderRadius:'5px',
-                  background: myAssign.type==='doublon'?'#ede9fe':sc.bg,
-                  border:`1px solid ${myAssign.type==='doublon'?'#c4b5fd':sc.border}`,
-                  fontSize:'10px', fontWeight:'600',
-                  color: myAssign.type==='doublon'?'#6d28d9':sc.text,
-                  cursor: isPendingReject ? 'default' : 'pointer',
-                  opacity: isPendingReject ? 0.6 : 1
-                },
-                onClick: isPendingReject ? null : ()=>{STATE.modal={type:'reject',date:dateStr,shiftId};render();}
-              },
-                isPendingReject ? '⏳ rejet en attente' : label
-              );
-            } else if (assigns.length > 0) {
-              // Assigned to someone else — do NOT show names, just "Attribué"
-              cellContent = el('div', {
-                style:{
-                  margin:'3px', padding:'3px 5px', borderRadius:'5px',
-                  background:'var(--bg)',
-                  border:'1px solid var(--border2)',
-                  fontSize:'10px', color:'var(--text3)', fontStyle:'italic'
-                }
-              }, '✗ Attribué');
-            } else {
-              // Unassigned — show "Disponible" only if week is open
-              const slotIsOpen = isSlotOpen(dateStr, shiftId);
-              cellContent = el('div', {
-                style:{
-                  margin:'3px', padding:'3px 5px', borderRadius:'5px',
-                  background: slotIsOpen ? '#f0fdf4' : 'var(--bg)',
-                  border: slotIsOpen ? '1px dashed #86efac' : '1px solid var(--border)',
-                  fontSize:'10px',
-                  color: slotIsOpen ? '#15803d' : 'var(--text3)',
-                  cursor: slotIsOpen ? 'pointer' : 'default'
-                },
-                onClick: slotIsOpen ? ()=>{
-                  dbAddRequest('claim',STATE.user,storageDate(dateStr,shiftId),shiftId).then(()=>{showToast(t('requestSent'),'info');render();}).catch(e=>showToast(e.message,'error'));
-                } : null
-              }, slotIsOpen ? '+ Disponible' : '—');
-            }
-
-            return el('div', {style:{
+            if (!slotExists) return el('div',{style:{
               borderRight:'1px solid var(--border)',
-              background: isToday ? '#f8fbff' : isWE ? '#f8f8f6' : 'transparent',
-              verticalAlign:'top', padding:'2px 0'
-            }}, cellContent);
+              background:isWE_g?'#f8f8f6':'transparent'
+            }});
+
+            let cell;
+            if (myAssign) {
+              const label = myAssign.type==='doublon'?'↻':'✓';
+              cell = el('div',{
+                style:{margin:'3px',padding:'3px 5px',borderRadius:'5px',
+                  background:myAssign.type==='doublon'?'#ede9fe':sc.bg,
+                  border:`1px solid ${myAssign.type==='doublon'?'#c4b5fd':sc.border}`,
+                  fontSize:'10px',fontWeight:'600',
+                  color:myAssign.type==='doublon'?'#6d28d9':sc.text,
+                  cursor:isPR?'default':'pointer',opacity:isPR?0.6:1},
+                onClick:isPR?null:()=>{STATE.modal={type:'reject',date:lookupDate,shiftId};render();}
+              }, isPR?'⏳':label+' Moi');
+            } else if (assigns.length > 0) {
+              cell = el('div',{style:{margin:'3px',padding:'3px 5px',borderRadius:'5px',
+                background:'var(--bg)',border:'1px solid var(--border2)',
+                fontSize:'10px',color:'var(--text3)',fontStyle:'italic'}},'✗ Attribué');
+            } else {
+              const open = isSlotOpen(dateStr, shiftId);
+              cell = el('div',{
+                style:{margin:'3px',padding:'3px 5px',borderRadius:'5px',
+                  background:open?'#f0fdf4':'var(--bg)',
+                  border:open?'1px dashed #86efac':'1px solid var(--border)',
+                  fontSize:'10px',color:open?'#15803d':'var(--text3)',
+                  cursor:open?'pointer':'default'},
+                onClick:open?()=>{
+                  dbAddRequest('claim',STATE.user,storageDate(dateStr,shiftId),shiftId)
+                    .then(()=>{showToast(t('requestSent'),'info');render();})
+                    .catch(e=>showToast(e.message,'error'));
+                }:null
+              }, open?'+ Dispo':'—');
+            }
+            return el('div',{style:{
+              borderRight:'1px solid var(--border)',
+              background:isToday_g?'#f8fbff':isWE_g?'#f8f8f6':'transparent',
+              padding:'2px 0'
+            }}, cell);
           })
         );
       });
+      return el('div',{}, hdr, ...shiftRows);
+    }
 
-      // Week separator with month/week label
-      const weekLabel = `${weekDays[0].getDate()} ${t(MONTH_KEYS[weekDays[0].getMonth()])}`;
-      return el('div', {},
-        el('div',{style:{padding:'4px 8px',fontSize:'10px',fontWeight:'600',color:'var(--text3)',background:'var(--bg)',borderBottom:'1px solid var(--border)',textTransform:'uppercase',letterSpacing:'0.5px'}},
-          `Semaine du ${weekLabel}`),
-        ...shiftRows
-      );
-    });
+    return el('div',{style:{
+      background:'var(--surface)',border:'1px solid var(--border)',
+      borderRadius:'var(--radius-lg)',overflow:'hidden',
+      overflowX:'auto', marginBottom:'16px'
+    }}, ...weeks_g.map(buildWeekGrid));
+  }
 
-    return el('div', {style:{
-      background:'var(--surface)',
-      border:'1px solid var(--border)',
-      borderRadius:'var(--radius-lg)',
-      overflowX:'auto',
-      marginBottom:'20px'
-    }},
-      ...headerCells,
-      ...weekGrids
+  // Mobile-friendly shift list grouped by day
+  function buildMobileGrid() {
+    const SHIFT_COLORS_MOB = {
+      S4:{bg:'#ede9fe',border:'#c4b5fd',text:'#6d28d9',label:'00h–06h ★'},
+      S1:{bg:'#dbeafe',border:'#93c5fd',text:'#1d4ed8',label:'06h–12h'},
+      S2:{bg:'#fce7f3',border:'#f9a8d4',text:'#be185d',label:'12h–18h'},
+      S3:{bg:'#d1fae5',border:'#6ee7b7',text:'#065f46',label:'18h–00h'},
+    };
+    const DAY_N_M = ['dim','lun','mar','mer','jeu','ven','sam'];
+
+    return el('div',{},
+      ...days.map(d => {
+        const dateStr = toISO(d);
+        const isWE = d.getDay()===0||d.getDay()===6;
+        const isToday = dateStr === toISO(new Date());
+
+        // Check if this day has any relevant shifts
+        const dayShifts = SHIFT_DISPLAY_ORDER.map(shiftId => {
+          const lookupDate = storageDate(dateStr, shiftId);
+          const assigns = getAssignments(lookupDate, shiftId);
+          const myAssign = assigns.find(a=>a.agent===STATE.user);
+          const open = isSlotOpen(dateStr, shiftId);
+          return {shiftId, assigns, myAssign, open, lookupDate};
+        });
+
+        const hasAnything = dayShifts.some(s => s.myAssign || s.open);
+        if (!hasAnything) return null;
+
+        return el('div',{style:{
+          marginBottom:'10px',border:'1px solid var(--border)',
+          borderRadius:'var(--radius)',background:'var(--surface)',
+          borderLeft:`3px solid ${isToday?'var(--accent)':isWE?'var(--accent)':'var(--border2)'}`
+        }},
+          el('div',{style:{
+            padding:'8px 12px',fontWeight:'600',fontSize:'13px',
+            background:isToday?'var(--accent-light)':isWE?'#f8f8f6':'var(--bg)',
+            borderBottom:'1px solid var(--border)',
+            color:isToday?'var(--accent)':isWE?'var(--accent)':'var(--text)'
+          }},
+            `${DAY_N_M[d.getDay()]} ${d.getDate()} ${t(MONTH_KEYS[d.getMonth()])}`
+          ),
+          el('div',{style:{padding:'8px'}},
+            ...dayShifts.map(({shiftId,assigns,myAssign,open,lookupDate}) => {
+              const sc = SHIFT_COLORS_MOB[shiftId];
+              const isPR = pendingRejects.has(`${lookupDate}_${shiftId}`);
+              if (!myAssign && !open) return null;
+
+              return el('div',{style:{
+                display:'flex',alignItems:'center',justifyContent:'space-between',
+                padding:'8px 10px',marginBottom:'6px',borderRadius:'var(--radius)',
+                background:myAssign?sc.bg:open?'#f0fdf4':'var(--bg)',
+                border:`1px solid ${myAssign?sc.border:open?'#86efac':'var(--border)'}`,
+              }},
+                el('span',{style:{fontSize:'12px',fontWeight:'600',color:sc.text}}, sc.label),
+                myAssign
+                  ? el('span',{style:{fontSize:'12px',color:myAssign.type==='doublon'?'#6d28d9':sc.text,fontWeight:'600'}},
+                      isPR?'⏳ rejet en attente':myAssign.type==='doublon'?'↻ doublon':'✓ Attribué')
+                  : el('button',{
+                      style:{fontSize:'11px',padding:'4px 10px',borderRadius:'var(--radius)',
+                        border:'1px solid #86efac',background:'#dcfce7',color:'#15803d',cursor:'pointer'},
+                      onClick:()=>{
+                        dbAddRequest('claim',STATE.user,lookupDate,shiftId)
+                          .then(()=>{showToast(t('requestSent'),'info');render();})
+                          .catch(e=>showToast(e.message,'error'));
+                      }
+                    },'+ Demander')
+              );
+            }).filter(Boolean)
+          )
+        );
+      }).filter(Boolean)
     );
   }
 
-  // ── Listing ───────────────────────────────────────────────────────────────
   function buildListing() {
     if (!myShiftsList.length) {
       return el('div',{class:'empty-state'},el('div',{class:'empty-icon'},'📋'),el('p',{},t('noShiftsYet')));
