@@ -1061,7 +1061,6 @@ async function loadAllData() {
         dispo: row.dispo, doublon: row.doublon
       };
     });
-    console.log('[INIT] Loaded', avail.length, 'availability rows');
 
     // 3. Assignments
     const assigns = await sbGet('assignments', 'order=date,shift_id');
