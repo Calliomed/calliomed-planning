@@ -1826,19 +1826,33 @@ async function saveAll() {
         doublon:  val.doublon  || 'unavailable'
       }];
       // Use direct fetch with full error details
-      const r = await fetch(
-        `${STATE.supabaseUrl}/rest/v1/availability?on_conflict=agent_id,date,shift_id`,
-        {
+      // Try PATCH first (update existing row)
+      const filterUrl = `${STATE.supabaseUrl}/rest/v1/availability?agent_id=eq.${STATE.user}&date=eq.${date}&shift_id=eq.${shiftId}`;
+      const patchR = await fetch(filterUrl, {
+        method: 'PATCH',
+        headers: {
+          'apikey': STATE.supabaseKey,
+          'Authorization': 'Bearer ' + STATE.supabaseKey,
+          'Content-Type': 'application/json',
+          'Prefer': 'return=minimal'
+        },
+        body: JSON.stringify({dispo: row[0].dispo, doublon: row[0].doublon})
+      });
+      // If no row existed (0 rows updated), do INSERT
+      const count = parseInt(patchR.headers.get('content-range')?.split('/')[1] || '1');
+      let r = patchR;
+      if (patchR.ok && count === 0) {
+        r = await fetch(`${STATE.supabaseUrl}/rest/v1/availability`, {
           method: 'POST',
           headers: {
             'apikey': STATE.supabaseKey,
             'Authorization': 'Bearer ' + STATE.supabaseKey,
             'Content-Type': 'application/json',
-            'Prefer': 'resolution=merge-duplicates'
+            'Prefer': 'return=minimal'
           },
-          body: JSON.stringify(row)
-        }
-      );
+          body: JSON.stringify(row[0])
+        });
+      }
       const responseText = await r.text();
       console.log('[saveAll] response:', r.status, r.statusText, responseText.substring(0, 200));
       if (!r.ok) {
@@ -3105,6 +3119,7 @@ function renderSidebar() {
       !isAdmin ? navBtn('available', '🔓', t('availableShifts')) : null,
       !isAdmin ? navBtn('dispo',     '✏️',  'Mes disponibilités') : null,
       !isAdmin ? navBtn('nightcount','🌙', t('nightCount')) : null,
+      !isAdmin ? navBtn('changepwd', '🔑', 'Changer mon mot de passe') : null,
     ),
     el('div', {class:'sidebar-footer'},
       el('select', {class:'lang-select', onChange: e => {STATE.lang=e.target.value;render();}},
@@ -4235,6 +4250,7 @@ function render() {
       {page:'available',  emoji:'🔓', label:'Disponibles'},
       {page:'dispo',      emoji:'✏️',  label:'Mes dispos'},
       {page:'nightcount', emoji:'🌙', label:'Nuits'},
+      {page:'changepwd',  emoji:'🔑', label:'Mot de passe'},
     ];
     const adminPages = [
       {page:'planning',   emoji:'📅', label:'Planning'},
