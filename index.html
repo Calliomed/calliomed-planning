@@ -558,8 +558,8 @@ const TRANSLATIONS = {
 // ===================== STATE =====================
 const STATE = {
   // Config
-  supabaseUrl: localStorage.getItem('sb_url') || '',
-  supabaseKey: localStorage.getItem('sb_key') || '',
+  supabaseUrl: 'https://vklgmzsntvfwiyxoiidd.supabase.co',
+  supabaseKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZrbGdtenNudHZmd2l5eG9paWRkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE3NzkyMDUsImV4cCI6MjA5NzM1NTIwNX0.-1kZZ6BqC1NFtkb3BBSla8O46NdBTZGIr1KNaxfKpf0',
   // Session
   lang: localStorage.getItem('sb_lang') || 'fr',
   user: null,        // agent_id (short key)
@@ -1217,14 +1217,13 @@ function renderSetup() {
         if (brevoKey && !brevoKey.includes('•')) localStorage.setItem('brevo_key', brevoKey);
         STATE.page = 'loading'; render();
         try {
-          // First time: seed agents
           const existing = await sbGet('agents', 'limit=1');
           if (!existing.length) await seedAgents();
           await loadAllData();
           STATE.page = 'login';
         } catch(e) {
-          STATE.page = 'setup';
           showToast('Connexion échouée : ' + e.message, 'error');
+          STATE.page = 'login';
         }
         render();
       }}, '🔌 Connecter'),
@@ -1638,7 +1637,14 @@ function renderAvailabilityInput() {
               ...days.map(d => {
                 const dateStr = toISO(d);
                 const doublon = getCurrentDoublon(dateStr);
-                const opt = DISPO_OPTS.find(o=>o.val===doublon) || DISPO_OPTS[3];
+                // Purple tones for doublon row regardless of status
+                const DOUBLON_OPTS = {
+                  preferred:   {bg:'#ede9fe', border:'#a78bfa', text:'#6d28d9', icon:'✓'},
+                  maybe:       {bg:'#f3e8ff', border:'#c4b5fd', text:'#7c3aed', icon:'?'},
+                  ask:         {bg:'#faf5ff', border:'#ddd6fe', text:'#8b5cf6', icon:'~'},
+                  unavailable: {bg:'#f5f3ff', border:'#e9d5ff', text:'#a78bfa', icon:'✗'},
+                };
+                const dopt = DOUBLON_OPTS[doublon] || DOUBLON_OPTS.unavailable;
                 const isWE = d.getDay()===0||d.getDay()===6;
                 return el('div',{
                   style:{
@@ -1650,11 +1656,10 @@ function renderAvailabilityInput() {
                 },
                   el('div',{style:{
                     borderRadius:'4px', padding:'2px 3px', textAlign:'center',
-                    background:opt.bg, border:`1px solid ${opt.border}`,
-                    cursor:'pointer', fontSize:'9px', fontWeight:'500', color:opt.text,
+                    background:dopt.bg, border:`1px solid ${dopt.border}`,
+                    cursor:'pointer', fontSize:'9px', fontWeight:'500', color:dopt.text,
                     minHeight:'18px', display:'flex', alignItems:'center', justifyContent:'center',
-                    opacity:'0.85'
-                  }}, opt.label.split(' ')[0])
+                  }}, dopt.icon)
                 );
               })
             ] : [])
@@ -1685,6 +1690,16 @@ const AGENT_DISPLAY_NAMES = {
 function displayName(agentId) {
   const a = STATE.agents.find(x => x.id === agentId);
   return a ? a.display_name : (AGENT_DISPLAY_NAMES[agentId] || agentId);
+}
+
+// Short name for planning grid: "Prénom N." (first name + first letter of last name)
+function shortName(agentId) {
+  const full = displayName(agentId); // e.g. "Elodie Grandjean"
+  const parts = full.trim().split(' ');
+  if (parts.length === 1) return parts[0];
+  const firstName = parts[0];
+  const lastInitial = parts[parts.length-1][0].toUpperCase();
+  return firstName + ' ' + lastInitial + '.';
 }
 
 // ===================== HELPERS =====================
@@ -2519,7 +2534,7 @@ function renderPlanning() {
                       border:`1px solid ${bd}`,display:'flex',alignItems:'center',gap:'2px'},
                     title: displayName(a.agent)+(isConsec?' ⚠ consécutif':'')
                   },
-                    displayName(a.agent).split(' ')[0].toLowerCase(),
+                    shortName(a.agent),
                     isConsec ? el('span',{style:{color:'var(--orange)',fontSize:'9px'}},'⚠') : null
                   );
                 })
@@ -2534,7 +2549,7 @@ function renderPlanning() {
                     background:'var(--purple-bg)',color:'var(--purple)',
                     borderRadius:'4px',padding:'1px 4px',fontSize:'9px',
                     fontWeight:'500',border:'1px solid #c4b5fd',marginTop:'1px'
-                  }}, displayName(a.agent).split(' ')[0].toLowerCase()+'↻')
+                  }}, shortName(a.agent)+'↻')
                 )
               : null
           );
@@ -2555,10 +2570,14 @@ function renderPlanning() {
         el('button',{class:'btn btn-secondary',style:{fontSize:'12px'},
           onClick:()=>{sendDispoRequests().catch(e=>showToast('Erreur: '+e.message,'error'));}},'✉️ Demander dispos'),
         STATE.pendingStatus === 'draft' ? el('button',{class:'btn btn-secondary',onClick:autoGenerate},'⚡ '+t('generate')) : null,
-        STATE.pendingStatus === 'draft' ? el('button',{class:'btn btn-secondary',onClick:()=>{STATE.pendingStatus='pending';showToast(t('pendingValidation'),'info');render();}},t('sendForValidation')) : null,
-        STATE.pendingStatus === 'pending' ? el('button',{class:'btn btn-success',onClick:()=>{STATE.pendingStatus='validated';
-              sendPlanningToAgents().catch(e=>showToast('Erreur email: '+e.message,'error'));
-              showToast(t('validated'));render();}},t('validate')) : null,
+        STATE.pendingStatus === 'draft' ? el('button',{class:'btn btn-secondary',onClick:()=>{
+              STATE.pendingStatus='pending';
+              showToast(t('pendingValidation'),'info');
+              render();
+            }},t('sendForValidation')) : null,
+        STATE.pendingStatus === 'pending' ? el('button',{class:'btn btn-success',onClick:()=>{
+              STATE.modal={type:'confirm-send'}; render();
+            }},t('validate')) : null,
         el('button',{class:'btn btn-secondary',onClick:exportCSV},'⬇ '+t('export'))
       )
     ),
@@ -3283,19 +3302,14 @@ ${err.stack||''}</pre>
 // Restore lang preference
 if (localStorage.getItem('sb_lang')) STATE.lang = localStorage.getItem('sb_lang');
 
-// If supabase config exists, go straight to loading
-if (STATE.supabaseUrl && STATE.supabaseKey) {
-  STATE.page = 'loading';
+// Credentials are embedded — go directly to loading
+STATE.page = 'loading';
+render();
+loadAllData().then(() => { STATE.page = 'login'; render(); }).catch(e => {
+  showToast('Erreur de connexion : ' + e.message, 'error');
+  STATE.page = 'login';
   render();
-  loadAllData().then(() => { STATE.page = 'login'; render(); }).catch(e => {
-    STATE.page = 'setup';
-    showToast('Connexion échouée, vérifiez la configuration.', 'error');
-    render();
-  });
-} else {
-  STATE.page = 'setup';
-  render();
-}
+});
 </script>
 </body>
 </html>
