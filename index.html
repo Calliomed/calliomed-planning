@@ -1499,11 +1499,12 @@ function renderAgents() {
         el('div', {class:'field',style:{margin:'0'}},
           el('label',{}, 'Rôle'),
           el('select',{
-            onChange: e=>form.role=e.target.value,
+            value: form.role || 'agent',
+            onChange: e=>{form.role=e.target.value; render();},
             style:{width:'100%',padding:'8px 10px',border:'1px solid var(--border2)',borderRadius:'var(--radius)',fontSize:'13px',background:'var(--bg)',color:'var(--text)'}
           },
-            el('option',{value:'agent',selected:form.role!=='admin'?'true':null},'👤 Agent'),
-            el('option',{value:'admin',selected:form.role==='admin'?'true':null},'⚙️ Administrateur')
+            el('option',{value:'agent'},'👤 Agent'),
+            el('option',{value:'admin'},'⚙️ Administrateur')
           )
         ),
         el('div', {class:'field',style:{margin:'0'}},
@@ -2636,12 +2637,16 @@ function el(tag, props={}, ...children) {
     else if (k === 'style' && typeof v === 'object') Object.assign(e.style, v);
     else if (k.startsWith('on')) e.addEventListener(k.slice(2).toLowerCase(), v);
     else if (k === 'html') e.innerHTML = v;
+    else if (k === 'value') e._pendingValue = v; // set after children appended
+    else if (k === 'checked') e.checked = !!v;
+    else if (v === null || v === undefined) {}
     else e.setAttribute(k, v);
   });
   children.flat().forEach(c => {
     if (c == null) return;
     e.appendChild(typeof c === 'string' ? document.createTextNode(c) : c);
   });
+  if (e._pendingValue !== undefined) { e.value = e._pendingValue; delete e._pendingValue; }
   return e;
 }
 
