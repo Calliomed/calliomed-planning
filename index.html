@@ -1807,33 +1807,55 @@ function renderAvailabilityInput() {
     if (!editKeys.length) { showToast('Rien à sauvegarder','info'); return; }
     STATE.syncing = true; render();
     try {
-      // Save one by one to avoid batch issues and get better error messages
       let saved = 0;
+      let firstErr = null;
       for (const [key, val] of Object.entries(STATE.dispoEdits)) {
         const lastUnderscore = key.lastIndexOf('_');
         const date    = key.substring(0, lastUnderscore);
         const shiftId = key.substring(lastUnderscore + 1);
-        const row = {
+        const row = [{
           agent_id: STATE.user,
-          date,
+          date:     date,
           shift_id: shiftId,
-          dispo: val.dispo || 'unavailable',
-          doublon: val.doublon || 'unavailable'
-        };
-        await sbUpsert('availability', row, 'agent_id,date,shift_id');
-        // Update local state immediately
-        STATE.availability[`${STATE.user}_${date}_${shiftId}`] = {dispo: row.dispo, doublon: row.doublon};
+          dispo:    val.dispo    || 'unavailable',
+          doublon:  val.doublon  || 'unavailable'
+        }];
+        // Use direct fetch with full error details
+        const r = await fetch(
+          `${STATE.supabaseUrl}/rest/v1/availability?on_conflict=agent_id,date,shift_id`,
+          {
+            method: 'POST',
+            headers: {
+              'apikey': STATE.supabaseKey,
+              'Authorization': 'Bearer ' + STATE.supabaseKey,
+              'Content-Type': 'application/json',
+              'Prefer': 'resolution=merge-duplicates'
+            },
+            body: JSON.stringify(row)
+          }
+        );
+        if (!r.ok) {
+          const errText = await r.text();
+          firstErr = `HTTP ${r.status}: ${errText}`;
+          console.error('Save error for', key, firstErr);
+          break;
+        }
+        STATE.availability[`${STATE.user}_${date}_${shiftId}`] = {dispo: row[0].dispo, doublon: row[0].doublon};
         saved++;
       }
-      await trackDispoUpdate(STATE.user, saved).catch(()=>{});
-      STATE.dispoEdits = {};
       STATE.syncing = false;
-      showToast(`✓ ${saved} disponibilité(s) enregistrée(s)`);
+      if (firstErr) {
+        showToast('Erreur Supabase: ' + firstErr, 'error');
+      } else {
+        await trackDispoUpdate(STATE.user, saved).catch(()=>{});
+        STATE.dispoEdits = {};
+        showToast(`✓ ${saved} disponibilité(s) enregistrée(s)`);
+      }
       render();
     } catch(e) {
       STATE.syncing = false;
-      showToast('Erreur sauvegarde: ' + e.message, 'error');
-      console.error('saveAll error:', e);
+      showToast('Erreur réseau: ' + e.message, 'error');
+      console.error('saveAll network error:', e);
       render();
     }
   }
