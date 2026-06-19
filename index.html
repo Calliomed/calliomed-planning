@@ -644,6 +644,8 @@ const STATE = {
   agentTab: 'grid',
   viewWeekStart: null,
   loginError: '',
+  dispoViewMode: 'grid',
+  _mobileDetected: false,
   openWeeks: new Set(),
   emailTemplates: null,  // loaded from Supabase settings
   dispoLastUpdate: {},   // agentId -> {date, count}
@@ -726,6 +728,8 @@ const AGENT_EMAILS = {
 };
 
 function agentEmail(agentId) {
+  const agDb = STATE.agents.find(a => a.id === agentId);
+  if (agDb && agDb.email) return {email: agDb.email, name: agDb.display_name};
   return AGENT_EMAILS[agentId] || {email:'', name: displayName(agentId)};
 }
 
@@ -1365,9 +1369,12 @@ function renderAgents() {
       // Refresh agents list
       const agents = await sbGet('agents', 'order=display_name');
       STATE.agents = agents;
+      const _newAg = {id, display_name: form.name.trim(), email: form.email.trim(), role: form.role};
+      const _savedPwd = form.pwd;
       form.name = ''; form.role = 'agent'; form.email = ''; form.pwd = '';
       form.saving = false;
-      showToast('Agent ajouté : ' + id);
+      STATE.modal = {type: 'welcome-email', agent: _newAg, pwd: _savedPwd};
+      showToast('Agent créé : ' + id);
       render();
     } catch(e) {
       form.error = 'Erreur : ' + e.message;
@@ -2863,6 +2870,51 @@ function renderModal() {
     );
   }
 
+  if (m.type === 'welcome-email') {
+    const _ag = m.agent;
+    const _hasMail = !!_ag.email;
+    const _tpl = getTemplates().welcome;
+    const _preview = _tpl.body
+      .replace(/{{prenom}}/g, _ag.display_name.split(' ')[0])
+      .replace(/{{nom}}/g, _ag.display_name.split(' ').slice(1).join(' ') || '')
+      .replace(/{{mot_de_passe}}/g, m.pwd || '(mot de passe initial)')
+      .replace(/{{lien_app}}/g, window.location.href.split('?')[0]);
+    return el('div', {class:'modal-overlay'},
+      el('div', {class:'modal', style:{width:'480px',maxHeight:'80vh',overflowY:'auto'}},
+        el('div', {class:'modal-title'}, '🎉 Compte créé — ' + _ag.display_name),
+        _hasMail
+          ? el('div',{class:'alert alert-success',style:{marginBottom:'12px'}},
+              '✅ Email prêt pour : ' + _ag.email)
+          : el('div',{class:'alert alert-warn',style:{marginBottom:'12px'}},
+              "⚠️ Pas d'email — envoi impossible."),
+        el('div',{style:{
+          background:'var(--bg)',border:'1px solid var(--border)',borderRadius:'var(--radius)',
+          padding:'10px',marginBottom:'12px',fontSize:'11px',fontFamily:'monospace',
+          lineHeight:'1.6',color:'var(--text2)',whiteSpace:'pre-wrap',
+          maxHeight:'180px',overflowY:'auto'
+        }}, _preview),
+        el('div',{class:'modal-footer'},
+          el('button',{class:'btn btn-secondary',onClick:()=>{STATE.modal=null;render();}},
+            'Fermer sans envoyer'),
+          _hasMail ? el('button',{class:'btn btn-primary',onClick: async ()=>{
+            try {
+              const _html = _preview.split('\n').join('<br>');
+              const _subj = _tpl.subject
+                .replace(/{{prenom}}/g, _ag.display_name.split(' ')[0])
+                .replace(/{{nom}}/g, _ag.display_name)
+                .replace(/{{mot_de_passe}}/g, m.pwd||'')
+                .replace(/{{lien_app}}/g, window.location.href.split('?')[0]);
+              await sendBrevoEmail({email:_ag.email,name:_ag.display_name},_subj,
+                `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px">${_html}</div>`);
+              showToast('Email de bienvenue envoyé à ' + _ag.email);
+              STATE.modal=null; render();
+            } catch(e){showToast('Erreur: '+e.message,'error');}
+          }}, "✉️ Envoyer l'email de bienvenue") : null
+        )
+      )
+    );
+  }
+
   if (m.type === 'confirm-remove') {
     return el('div', {class:'modal-overlay'},
       el('div', {class:'modal'},
@@ -3656,6 +3708,10 @@ function renderMyShifts() {
 // ===================== AVAILABLE SHIFTS (AGENT) =====================
 function renderAvailableShifts() {
   if (!STATE.viewWeekStart) STATE.viewWeekStart = getMonday(new Date());
+  if (!STATE._mobileDetected) {
+    STATE._mobileDetected = true;
+    if (window.innerWidth < 700) { STATE.agentTab = 'mobile'; STATE.dispoViewMode = 'list'; }
+  }
   const weekStart = STATE.viewWeekStart;
   const days = get4WeekDays(weekStart);
 
