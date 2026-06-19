@@ -2486,50 +2486,73 @@ function renderModal() {
   if (m.type === 'assign') {
     const agents = getSlotAgents(m.date, m.shiftId);
     const current = getAssignments(m.date, m.shiftId);
-    
-    return el('div', {class:'modal-overlay', onClick: e => { if(e.target===e.currentTarget){STATE.modal=null;render();} }},
-      el('div', {class:'modal'},
-        el('div', {class:'modal-title'}, `${t('assignAgent')} — ${formatDate(m.date)} ${shiftLabel(m.shiftId)}`),
-        
-        el('p', {style:{fontSize:'12px',color:'var(--text3)',marginBottom:'10px'}}, t('generateInfo')),
-        
-        el('div', {class:'agent-grid'},
-          ...[...agents].sort((a,b) => {
-            // Sort: assigned first, then available (preferred/maybe), then ask, then unavailable
-            const assigned_a = current.some(x=>x.agent===a.name) ? 0 : 1;
-            const assigned_b = current.some(x=>x.agent===b.name) ? 0 : 1;
-            if (assigned_a !== assigned_b) return assigned_a - assigned_b;
-            const prio = {preferred:0, maybe:1, ask:2, unavailable:3};
-            return (prio[a.dispo]||3) - (prio[b.dispo]||3);
-          }).map(ag => {
-            const isAssigned = current.some(a => a.agent === ag.name && a.type === 'main');
-            const isUnavail = ag.dispo === 'unavailable';
-            const isConsec = hasConsecutive(ag.name, m.date, m.shiftId);
-            // Admin can always assign/remove any agent regardless of availability
-            const cls = `agent-option${isAssigned?' selected':''} ${ag.dispo}`;
-            return el('div', {
-              class: cls,
-              style: isUnavail && !isAssigned ? {opacity:'0.5'} : {},
-              onClick: () => {
-                // Admin can always click — no restriction
-                if (isAssigned) { removeAssignment(m.date, m.shiftId, ag.name); dbRemoveAssignment(m.date, m.shiftId, ag.name).catch(e=>showToast(e.message,'error')); }
-                else { setAssignment(m.date, m.shiftId, ag.name); dbSetAssignment(m.date, m.shiftId, ag.name).catch(e=>showToast(e.message,'error')); }
-                render();
-              }
-            },
-              el('div', {class:'agent-name'},
-                displayName(ag.name),
-                isConsec ? el('span',{style:{color:'var(--orange)',fontSize:'10px',marginLeft:'4px'}},' ⚠ consécutif') : null,
-                isUnavail ? el('span',{style:{color:'var(--text3)',fontSize:'10px',marginLeft:'4px'}},' (indispo)') : null
-              ),
-              el('div', {class:'agent-dispo'},
-                el('span', {class:`badge badge-${dispoColor(ag.dispo)}`}, dispoLabel(ag.dispo)),
-                ag.doublon && ag.doublon !== 'unknown' ? el('span',{class:`badge badge-${dispoColor(ag.doublon)}`,style:{marginLeft:'4px',fontSize:'10px'}}, '19-21h') : null
-              )
-            );
-          })
+    const isS3 = m.shiftId === 'S3'; // Only S3 has doublon 19h-21h
+
+    function agentRow(ag, type) {
+      const isAssigned = current.some(a => a.agent === ag.name && a.type === type);
+      const isUnavail = type === 'main' ? ag.dispo === 'unavailable' : (ag.doublon === 'unavailable' || ag.doublon === 'unknown');
+      const isConsec = type === 'main' && hasConsecutive(ag.name, m.date, m.shiftId);
+      const dispoBadge = type === 'main'
+        ? el('span',{class:`badge badge-${dispoColor(ag.dispo)}`}, dispoLabel(ag.dispo))
+        : el('span',{style:{fontSize:'10px',background:'#ede9fe',color:'#6d28d9',padding:'1px 6px',borderRadius:'99px',border:'1px solid #c4b5fd'}},
+            ag.doublon && ag.doublon !== 'unavailable' && ag.doublon !== 'unknown'
+              ? '↻ ' + dispoLabel(ag.doublon)
+              : '↻ non dispo');
+
+      return el('div',{
+        class: `agent-option${isAssigned?' selected':''} ${type==='main'?ag.dispo:'preferred'}`,
+        style:{
+          opacity: isUnavail && !isAssigned ? '0.45' : '1',
+          borderColor: type==='doublon' ? (isAssigned?'#6d28d9':'#ddd6fe') : '',
+          background: type==='doublon' && isAssigned ? '#ede9fe' : ''
+        },
+        onClick: () => {
+          if (isAssigned) {
+            removeAssignment(m.date, m.shiftId, ag.name, type);
+            dbRemoveAssignment(m.date, m.shiftId, ag.name, type).catch(e=>showToast(e.message,'error'));
+          } else {
+            setAssignment(m.date, m.shiftId, ag.name, type);
+            dbSetAssignment(m.date, m.shiftId, ag.name, type).catch(e=>showToast(e.message,'error'));
+          }
+          render();
+        }
+      },
+        el('div',{class:'agent-name'},
+          displayName(ag.name),
+          isConsec ? el('span',{style:{color:'var(--orange)',fontSize:'10px',marginLeft:'4px'}},' ⚠') : null,
+          isUnavail ? el('span',{style:{color:'var(--text3)',fontSize:'10px',marginLeft:'4px'}},' (indispo)') : null
         ),
-        
+        el('div',{class:'agent-dispo'}, dispoBadge)
+      );
+    }
+
+    const sortedAgents = [...agents].sort((a,b) => {
+      const pa = current.some(x=>x.agent===a.name) ? 0 : 1;
+      const pb = current.some(x=>x.agent===b.name) ? 0 : 1;
+      if (pa!==pb) return pa-pb;
+      const prio = {preferred:0,maybe:1,ask:2,unavailable:3};
+      return (prio[a.dispo]||3)-(prio[b.dispo]||3);
+    });
+
+    return el('div', {class:'modal-overlay', onClick: e => { if(e.target===e.currentTarget){STATE.modal=null;render();} }},
+      el('div', {class:'modal', style:{width:'520px'}},
+        el('div', {class:'modal-title'}, `${t('assignAgent')} — ${formatDate(m.date)} ${shiftLabel(m.shiftId)}`),
+
+        // ── Main shift section ────────────────────────────────────────────
+        el('div',{style:{fontSize:'12px',fontWeight:'600',color:'var(--text2)',marginBottom:'6px',marginTop:'4px'}},
+          '👤 Shift principal'),
+        el('div', {class:'agent-grid'}, ...sortedAgents.map(ag => agentRow(ag, 'main'))),
+
+        // ── Doublon section (S3 only) ─────────────────────────────────────
+        isS3 ? el('div',{},
+          el('div',{style:{
+            fontSize:'12px',fontWeight:'600',color:'#6d28d9',
+            marginBottom:'6px',marginTop:'14px',
+            borderTop:'1px solid #ede9fe',paddingTop:'10px'
+          }}, '↻ Doublon 19h–21h (indépendant du shift principal)'),
+          el('div', {class:'agent-grid'}, ...sortedAgents.map(ag => agentRow(ag, 'doublon')))
+        ) : null,
+
         el('div', {class:'modal-footer'},
           el('button', {class:'btn btn-secondary', onClick:()=>{STATE.modal=null;render();}}, t('close')),
           el('button', {class:'btn btn-primary', onClick:()=>{STATE.modal=null;showToast(t('shiftAssigned'));render();}}, t('save'))
