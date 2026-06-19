@@ -993,7 +993,7 @@ async function loadAllData() {
 
     // Auto-refresh every 30s
     if (!STATE._refreshTimer) {
-      STATE._refreshTimer = setInterval(silentRefresh, 30000);
+      STATE._refreshTimer = setInterval(silentRefresh, 120000); // 2 min
     }
   } catch(e) {
     STATE.loading = false;
@@ -1003,6 +1003,8 @@ async function loadAllData() {
 }
 
 async function silentRefresh() {
+  // Pause auto-refresh while admin is actively working on planning
+  if (STATE.role === 'admin' && STATE.page === 'planning') return;
   try {
     const assigns = await sbGet('assignments', 'order=date,shift_id');
     STATE.assignments = {};
@@ -1903,7 +1905,7 @@ function autoGenerate() {
   const shiftCount = {};
   agents.forEach(id => { shiftCount[id] = 0; });
 
-  const PRIORITY = {preferred:0, maybe:1, ask:2, unavailable:99};
+  const PRIORITY = {preferred:0, maybe:1, ask:5, unavailable:99}; // ask=orange, only last resort
   const SHIFT_ORDER_GEN = ['S4','S1','S2','S3'];
 
   const byDate = {};
@@ -1929,7 +1931,10 @@ function autoGenerate() {
           return {id, dispo: info.dispo, doublon: info.doublon};
         })
         .filter(a => {
-          if (a.dispo === 'unavailable') return false;
+          // Seuls les agents ayant encodé une dispo (preferred/maybe/ask minimum)
+          // sont proposés. Si pas de dispo ou indisponible → jamais proposé.
+          if (!a.dispo || a.dispo === 'unavailable') return false;
+          // Exclure agents sans nuits
           if (isNight) {
             const agObj = STATE.agents.find(x=>x.id===a.id);
             if (agObj && agObj.no_night) return false;
@@ -2578,6 +2583,12 @@ function renderPlanning() {
         STATE.pendingStatus === 'pending' ? el('button',{class:'btn btn-success',onClick:()=>{
               STATE.modal={type:'confirm-send'}; render();
             }},t('validate')) : null,
+        el('button',{class:'btn btn-secondary',style:{fontSize:'12px'},onClick: async ()=>{
+          showToast('Actualisation...','info');
+          await silentRefresh();
+          showToast('Planning actualisé ✓');
+          render();
+        }}, '🔄'),
         el('button',{class:'btn btn-secondary',onClick:exportCSV},'⬇ '+t('export'))
       )
     ),
