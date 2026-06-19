@@ -1793,28 +1793,37 @@ function renderAvailabilityInput() {
   }
 
   async function saveAll() {
-    if (!Object.keys(STATE.dispoEdits).length) { showToast('Rien à sauvegarder','info'); return; }
+    const editKeys = Object.keys(STATE.dispoEdits);
+    if (!editKeys.length) { showToast('Rien à sauvegarder','info'); return; }
     STATE.syncing = true; render();
     try {
-      const rows = Object.entries(STATE.dispoEdits).map(([key, val]) => {
-        // Key format: "2026-06-27_S4" — date contains dashes, shiftId is last segment
+      // Save one by one to avoid batch issues and get better error messages
+      let saved = 0;
+      for (const [key, val] of Object.entries(STATE.dispoEdits)) {
         const lastUnderscore = key.lastIndexOf('_');
-        const date = key.substring(0, lastUnderscore);    // "2026-06-27"
-        const shiftId = key.substring(lastUnderscore + 1); // "S4"
-        return {agent_id: STATE.user, date, shift_id: shiftId, dispo: val.dispo, doublon: val.doublon || 'unavailable'};
-      });
-      await sbUpsert('availability', rows, 'agent_id,date,shift_id');
-      // Track update time and count
-      const totalCount = Object.keys(STATE.availability)
-        .filter(k => k.startsWith(STATE.user + '_')).length;
-      await trackDispoUpdate(STATE.user, totalCount).catch(()=>{});
+        const date    = key.substring(0, lastUnderscore);
+        const shiftId = key.substring(lastUnderscore + 1);
+        const row = {
+          agent_id: STATE.user,
+          date,
+          shift_id: shiftId,
+          dispo: val.dispo || 'unavailable',
+          doublon: val.doublon || 'unavailable'
+        };
+        await sbUpsert('availability', row, 'agent_id,date,shift_id');
+        // Update local state immediately
+        STATE.availability[`${STATE.user}_${date}_${shiftId}`] = {dispo: row.dispo, doublon: row.doublon};
+        saved++;
+      }
+      await trackDispoUpdate(STATE.user, saved).catch(()=>{});
       STATE.dispoEdits = {};
       STATE.syncing = false;
-      showToast('Disponibilités enregistrées ✓');
+      showToast(`✓ ${saved} disponibilité(s) enregistrée(s)`);
       render();
     } catch(e) {
       STATE.syncing = false;
-      showToast('Erreur: ' + e.message, 'error');
+      showToast('Erreur sauvegarde: ' + e.message, 'error');
+      console.error('saveAll error:', e);
       render();
     }
   }
