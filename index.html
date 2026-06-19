@@ -5,7 +5,7 @@
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>Calliomed — Planning v5.2</title>
+<title>Calliomed — Planning v5.3</title>
 <style>
 :root {
   --bg: #f7f6f3;
@@ -1115,9 +1115,9 @@ async function silentRefresh() {
     // Show notification if new pending requests appeared
     const newPending = STATE.requests.filter(r=>r.status==='pending').length;
     if (newPending > 0) {
-      document.title = `(${newPending}) Calliomed — Planning v5.2`;
+      document.title = `(${newPending}) Calliomed — Planning v5.3`;
     } else {
-      document.title = 'Calliomed — Planning v5.2';
+      document.title = 'Calliomed — Planning v5.3';
     }
     STATE.syncing = true; render();
     setTimeout(() => { STATE.syncing = false; render(); }, 1500);
@@ -1800,8 +1800,10 @@ function cycleDoublon(date) {
 
 async function saveAll() {
   const editKeys = Object.keys(STATE.dispoEdits);
+  console.log('[saveAll] called with', editKeys.length, 'edits:', editKeys);
   if (!editKeys.length) { showToast('Rien à sauvegarder','info'); return; }
   STATE.syncing = true; render();
+  showToast(`⏳ Sauvegarde de ${editKeys.length} ligne(s)...`, 'info');
   try {
     let saved = 0;
     let firstErr = null;
