@@ -984,13 +984,23 @@ async function sbPatch(table, filter, body) {
 }
 
 async function sbUpsert(table, body, onConflict) {
-  const headers = {...sbHeaders(), 'Prefer': `resolution=merge-duplicates,return=representation`};
+  // Always send array to Supabase
+  const payload = Array.isArray(body) ? body : [body];
+  const headers = {
+    'apikey': STATE.supabaseKey,
+    'Authorization': 'Bearer ' + STATE.supabaseKey,
+    'Content-Type': 'application/json',
+    'Prefer': 'resolution=merge-duplicates'
+  };
   const url = onConflict
     ? `${STATE.supabaseUrl}/rest/v1/${table}?on_conflict=${onConflict}`
     : `${STATE.supabaseUrl}/rest/v1/${table}`;
-  const r = await fetch(url, {method:'POST', headers, body: JSON.stringify(body)});
-  if (!r.ok) throw new Error(`UPSERT ${table}: ${r.status} ${await r.text()}`);
-  return r.json();
+  const r = await fetch(url, {method:'POST', headers, body: JSON.stringify(payload)});
+  if (!r.ok) {
+    const errText = await r.text();
+    throw new Error(`UPSERT ${table}: ${r.status} ${errText}`);
+  }
+  return r.status === 204 ? [] : r.json().catch(() => []);
 }
 
 async function sbDelete(table, filter) {
