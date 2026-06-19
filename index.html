@@ -1058,7 +1058,7 @@ async function loadAllData() {
 
     // Auto-refresh every 30s
     if (!STATE._refreshTimer) {
-      STATE._refreshTimer = setInterval(silentRefresh, 120000); // 2 min
+      STATE._refreshTimer = setInterval(silentRefresh, 30000); // 30 sec
     }
   } catch(e) {
     STATE.loading = false;
@@ -1068,8 +1068,8 @@ async function loadAllData() {
 }
 
 async function silentRefresh() {
-  // Pause auto-refresh while admin is actively working on planning
-  if (STATE.role === 'admin' && STATE.page === 'planning') return;
+  // Only pause refresh when a modal is open (admin actively editing)
+  if (STATE.modal !== null) return;
   try {
     const assigns = await sbGet('assignments', 'order=date,shift_id');
     STATE.assignments = {};
@@ -1093,6 +1093,13 @@ async function silentRefresh() {
     });
     rebuildAvailData();
     updateNightCounts();
+    // Show notification if new pending requests appeared
+    const newPending = STATE.requests.filter(r=>r.status==='pending').length;
+    if (newPending > 0) {
+      document.title = `(${newPending}) Calliomed — Planning v5.2`;
+    } else {
+      document.title = 'Calliomed — Planning v5.2';
+    }
     STATE.syncing = true; render();
     setTimeout(() => { STATE.syncing = false; render(); }, 1500);
   } catch(e) { /* silent */ }
@@ -3275,12 +3282,23 @@ function renderPlanning() {
         STATE.pendingStatus === 'pending' ? el('button',{class:'btn btn-success',onClick:()=>{
               STATE.modal={type:'confirm-send'}; render();
             }},t('validate')) : null,
-        el('button',{class:'btn btn-secondary',style:{fontSize:'12px'},onClick: async ()=>{
+        el('button',{class:'btn btn-secondary',style:{fontSize:'12px',position:'relative'},onClick: async ()=>{
           showToast('Actualisation...','info');
-          await silentRefresh();
+          await loadAllData();
           showToast('Planning actualisé ✓');
           render();
-        }}, '🔄'),
+        }},
+          '🔄',
+          STATE.requests.filter(r=>r.status==='pending').length > 0
+            ? el('span',{style:{
+                position:'absolute',top:'-4px',right:'-4px',
+                background:'var(--red)',color:'#fff',
+                fontSize:'9px',fontWeight:'700',
+                width:'14px',height:'14px',borderRadius:'50%',
+                display:'flex',alignItems:'center',justifyContent:'center'
+              }}, String(STATE.requests.filter(r=>r.status==='pending').length))
+            : null
+        ),
         el('button',{class:'btn btn-secondary',style:{fontSize:'12px'},onClick:()=>{
           autoOpenWeeks(days, weeks);
           showToast('Semaines ouvertes automatiquement ✓');
