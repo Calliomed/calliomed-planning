@@ -1716,6 +1716,205 @@ function renderAvailabilityInput() {
 
   const pendingCount = Object.keys(STATE.dispoEdits).length;
 
+  // ── Weekly dispo grid builder ─────────────────────────────────────────
+  // Build proper calendar weeks (Mon-Sun) covering the full month
+  const weeks_av = [];
+  if (days.length > 0) {
+    // Find Monday of first week
+    const firstDay = days[0];
+    const firstMon = new Date(firstDay);
+    const dow = firstMon.getDay();
+    firstMon.setDate(firstMon.getDate() - (dow === 0 ? 6 : dow - 1));
+
+    // Find Sunday of last week
+    const lastDay = days[days.length - 1];
+    const lastSun = new Date(lastDay);
+    const ldow = lastSun.getDay();
+    lastSun.setDate(lastSun.getDate() + (ldow === 0 ? 0 : 7 - ldow));
+
+    // Build weeks
+    let cur = new Date(firstMon);
+    while (cur <= lastSun) {
+      const week = [];
+      for (let i = 0; i < 7; i++) {
+        week.push(new Date(cur));
+        cur.setDate(cur.getDate() + 1);
+      }
+      weeks_av.push(week);
+    }
+  }
+
+  const DAY_N_AV = ['dim','lun','mar','mer','jeu','ven','sam'];
+  const DBO_AV = {
+    preferred:   {bg:'#ede9fe',border:'#a78bfa',text:'#6d28d9',icon:'✓'},
+    maybe:       {bg:'#f3e8ff',border:'#c4b5fd',text:'#7c3aed',icon:'?'},
+    ask:         {bg:'#faf5ff',border:'#ddd6fe',text:'#8b5cf6',icon:'~'},
+    unavailable: {bg:'#f5f3ff',border:'#e9d5ff',text:'#a78bfa',icon:'✗'},
+  };
+  const SHIFT_LABELS_AV = {S4:'00h–06h ★',S1:'06h–12h',S2:'12h–18h',S3:'18h–00h'};
+
+  // Check if a date is in the current month
+  const inMonth = d => d.getMonth() === month && d.getFullYear() === year;
+
+  function buildWeekDispo(weekDays) {
+    const wlabel = `Semaine du ${weekDays[0].getDate()} ${t(MONTH_KEYS[weekDays[0].getMonth()])}`;
+    const isWE_av = d => d.getDay()===0||d.getDay()===6;
+
+    const hdr = el('div',{style:{
+      display:'grid', gridTemplateColumns:`72px repeat(7,1fr)`,
+      background:'var(--bg)', borderBottom:'1px solid var(--border)',
+      borderTop:'2px solid var(--border2)', marginTop:'8px'
+    }},
+      el('div',{style:{padding:'5px 8px',fontSize:'10px',fontWeight:'600',
+        color:'var(--text3)',textTransform:'uppercase',letterSpacing:'0.5px'}}, wlabel),
+      ...weekDays.map(d => {
+        const outM = !inMonth(d);
+        return el('div',{style:{
+          padding:'4px 2px',textAlign:'center',
+          background: outM?'var(--bg)': isWE_av(d)?'#fafafa':'transparent',
+          opacity: outM?'0.3':'1'
+        }},
+          el('div',{style:{fontSize:'9px',textTransform:'uppercase',
+            color:isWE_av(d)?'var(--accent)':'var(--text3)'}}, DAY_N_AV[d.getDay()]),
+          el('div',{style:{fontSize:'12px',fontWeight:'700',
+            color:isWE_av(d)?'var(--accent)':'var(--text)',
+            width:'20px',height:'20px',borderRadius:'50%',
+            display:'flex',alignItems:'center',justifyContent:'center',margin:'1px auto 0'
+          }}, String(d.getDate()))
+        );
+      })
+    );
+
+    const shiftRows = SHIFT_ORDER.map(shiftId => {
+      const sc = SHIFT_COLORS_DISPO[shiftId];
+      const mainR = el('div',{style:{
+        display:'grid', gridTemplateColumns:`72px repeat(7,1fr)`,
+        borderBottom: shiftId==='S3'?'none':'1px solid var(--border)'
+      }},
+        el('div',{style:{padding:'3px 6px',display:'flex',flexDirection:'column',justifyContent:'center',
+          background:sc.bg,borderRight:'1px solid var(--border)'}},
+          el('span',{style:{fontSize:'9px',fontWeight:'700',color:sc.text}}, sc.label)
+        ),
+        ...weekDays.map(d => {
+          const ds = toISO(d);
+          const outM = !inMonth(d);
+          if (outM) return el('div',{style:{borderRight:'1px solid var(--border)',background:'var(--bg)',opacity:'0.2'}});
+          const dispo = getCurrentDispo(ds, shiftId);
+          const opt = DISPO_OPTS.find(o=>o.val===dispo)||DISPO_OPTS[3];
+          const isEd = !!STATE.dispoEdits[`${ds}_${shiftId}`];
+          return el('div',{
+            style:{padding:'2px 1px',borderRight:'1px solid var(--border)',
+              background:isWE_av(d)?'#fafafa':'transparent'},
+            onClick:()=>cycleDispo(ds,shiftId)
+          },
+            el('div',{style:{
+              borderRadius:'3px',padding:'2px',textAlign:'center',
+              background:opt.bg,border:`1px solid ${isEd?'#7c3aed':opt.border}`,
+              cursor:'pointer',fontSize:'9px',fontWeight:'600',color:opt.text,
+              minHeight:'20px',display:'flex',alignItems:'center',justifyContent:'center',
+              outline:isEd?'2px solid #7c3aed':'none'
+            }}, opt.label.split(' ')[0])
+          );
+        })
+      );
+
+      const dblR = shiftId==='S3' ? el('div',{style:{
+        display:'grid', gridTemplateColumns:`72px repeat(7,1fr)`,
+        borderBottom:'1px solid var(--border)'
+      }},
+        el('div',{style:{padding:'2px 6px 2px 10px',display:'flex',alignItems:'center',
+          background:'#f5f3ff',borderRight:'1px solid var(--border)'}},
+          el('span',{style:{fontSize:'8px',fontWeight:'600',color:'#6d28d9'}},'↻ 19h–21h')
+        ),
+        ...weekDays.map(d => {
+          const ds = toISO(d);
+          const outM = !inMonth(d);
+          if (outM) return el('div',{style:{borderRight:'1px solid var(--border)',background:'var(--bg)',opacity:'0.2'}});
+          const k = `${STATE.user}_${ds}_S3`;
+          const dbl = STATE.availability[k]?.doublon||'unavailable';
+          const dopt = DBO_AV[dbl]||DBO_AV.unavailable;
+          return el('div',{
+            style:{padding:'1px 1px 2px',borderRight:'1px solid var(--border)',
+              background:isWE_av(d)?'#fafafa':'transparent'},
+            onClick:()=>cycleDoublon(ds)
+          },
+            el('div',{style:{
+              borderRadius:'3px',padding:'2px',textAlign:'center',
+              background:dopt.bg,border:`1px solid ${dopt.border}`,
+              cursor:'pointer',fontSize:'9px',fontWeight:'600',color:dopt.text,
+              minHeight:'16px',display:'flex',alignItems:'center',justifyContent:'center'
+            }}, dopt.icon)
+          );
+        })
+      ) : null;
+      return [mainR, dblR].filter(Boolean);
+    }).flat();
+    return el('div',{}, hdr, ...shiftRows);
+  }
+
+  // ── Mobile list view ──────────────────────────────────────────────────
+  if (!STATE.dispoViewMode) STATE.dispoViewMode = 'grid';
+
+  function buildMobileList() {
+    return el('div',{},
+      ...days.map(d => {
+        const ds = toISO(d);
+        const dayName = DAY_N_AV[d.getDay()];
+        const isWE = d.getDay()===0||d.getDay()===6;
+        return el('div',{style:{
+          marginBottom:'8px',border:'1px solid var(--border)',
+          borderRadius:'var(--radius)',background:'var(--surface)',
+          borderLeft:`3px solid ${isWE?'var(--accent)':'var(--border2)'}`
+        }},
+          el('div',{style:{
+            padding:'6px 12px',fontWeight:'600',fontSize:'13px',
+            background:isWE?'var(--accent-light)':'var(--bg)',
+            borderBottom:'1px solid var(--border)',
+            color:isWE?'var(--accent)':'var(--text)'
+          }}, `${dayName} ${d.getDate()} ${t(MONTH_KEYS[d.getMonth()])}`),
+          el('div',{style:{padding:'8px 12px',display:'grid',gridTemplateColumns:'1fr 1fr',gap:'6px'}},
+            ...SHIFT_ORDER.map(shiftId => {
+              const sc = SHIFT_COLORS_DISPO[shiftId];
+              const dispo = getCurrentDispo(ds, shiftId);
+              const opt = DISPO_OPTS.find(o=>o.val===dispo)||DISPO_OPTS[3];
+              const isEd = !!STATE.dispoEdits[`${ds}_${shiftId}`];
+              const cells = [el('div',{
+                style:{
+                  padding:'6px 8px',borderRadius:'var(--radius)',
+                  background:opt.bg,border:`1px solid ${isEd?'#7c3aed':opt.border}`,
+                  cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'space-between',
+                  outline:isEd?'2px solid #7c3aed':'none'
+                },
+                onClick:()=>cycleDispo(ds,shiftId)
+              },
+                el('span',{style:{fontSize:'11px',fontWeight:'600',color:sc.text}}, sc.label),
+                el('span',{style:{fontSize:'12px',fontWeight:'700',color:opt.text}}, opt.label.split(' ')[0])
+              )];
+              if (shiftId==='S3') {
+                const k = `${STATE.user}_${ds}_S3`;
+                const dbl = STATE.availability[k]?.doublon||'unavailable';
+                const dopt = DBO_AV[dbl]||DBO_AV.unavailable;
+                cells.push(el('div',{
+                  style:{
+                    padding:'6px 8px',borderRadius:'var(--radius)',
+                    background:dopt.bg,border:`1px solid ${dopt.border}`,
+                    cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'space-between'
+                  },
+                  onClick:()=>cycleDoublon(ds)
+                },
+                  el('span',{style:{fontSize:'11px',fontWeight:'600',color:'#6d28d9'}}, '↻ 19h–21h'),
+                  el('span',{style:{fontSize:'12px',fontWeight:'700',color:dopt.text}}, dopt.icon)
+                ));
+              }
+              return cells;
+            }).flat()
+          )
+        );
+      })
+    );
+  }
+
+
   return el('div', {},
     el('div', {class:'page-header'},
       el('div', {},
@@ -1748,129 +1947,30 @@ function renderAvailabilityInput() {
       el('button', {class:'month-btn', onClick:nextM}, '›')
     ),
 
-    el('div', {style:{overflowX:'auto'}},
-      el('div', {style:{
-        display:'grid',
-        gridTemplateColumns:`80px repeat(${days.length}, minmax(36px,1fr))`,
-        border:'1px solid var(--border)', borderRadius:'var(--radius-lg)',
-        background:'var(--surface)', minWidth:'600px'
-      }},
-        // Header
-        el('div', {style:{padding:'8px 6px',fontWeight:'600',fontSize:'11px',color:'var(--text3)',textTransform:'uppercase',borderBottom:'2px solid var(--border)'}},'Shift'),
-        ...days.map(d => {
-          const dayNames=['dim','lun','mar','mer','jeu','ven','sam'];
-          const isWE = d.getDay()===0||d.getDay()===6;
-          return el('div',{style:{
-            padding:'6px 2px', textAlign:'center', borderBottom:'2px solid var(--border)',
-            background:isWE?'#fafafa':'transparent'
-          }},
-            el('div',{style:{fontSize:'9px',textTransform:'uppercase',color:isWE?'var(--accent)':'var(--text3)'
-            }}, dayNames[d.getDay()]),
-            el('div',{style:{fontSize:'12px',fontWeight:'700',color:isWE?'var(--accent)':'var(--text)'}},String(d.getDate()))
-          );
-        }),
 
-        // Shift rows
-        ...SHIFT_ORDER.map(shiftId => {
-          const sc = SHIFT_COLORS_DISPO[shiftId];
-          const DOUBLON_COLOR = {bg:'#f5f3ff',border:'#c4b5fd',text:'#6d28d9'};
-
-          function getCurrentDoublon(date) {
-            const k = `${STATE.user}_${date}_${shiftId}`;
-            return STATE.availability[k]?.doublon || 'unavailable';
-          }
-          function cycleDoublon(date) {
-            const current = getCurrentDoublon(date);
-            const idx = DISPO_OPTS.findIndex(o => o.val === current);
-            const next = DISPO_OPTS[(idx+1) % DISPO_OPTS.length].val;
-            const k = `${STATE.user}_${date}_${shiftId}`;
-            STATE.availability[k] = {
-              dispo: STATE.availability[k]?.dispo || 'unavailable',
-              doublon: next
-            };
-            if (!STATE.dispoEdits[`${date}_${shiftId}`])
-              STATE.dispoEdits[`${date}_${shiftId}`] = {dispo: STATE.availability[k].dispo, doublon: next};
-            else
-              STATE.dispoEdits[`${date}_${shiftId}`].doublon = next;
-            render();
-          }
-
-          return [
-            // ── Main shift label
-            el('div',{style:{
-              padding:'4px 6px', display:'flex', alignItems:'center',
-              background:sc.bg, borderRight:'1px solid var(--border)',
-              borderBottom: shiftId === 'S3' ? 'none' : '1px solid var(--border)'
-            }},
-              el('span',{style:{fontSize:'10px',fontWeight:'700',color:sc.text}}, sc.label)
-            ),
-            // ── Main shift day cells
-            ...days.map(d => {
-              const dateStr = toISO(d);
-              const dispo = getCurrentDispo(dateStr, shiftId);
-              const opt = DISPO_OPTS.find(o=>o.val===dispo) || DISPO_OPTS[3];
-              const isEdited = !!STATE.dispoEdits[`${dateStr}_${shiftId}`];
-              const isWE = d.getDay()===0||d.getDay()===6;
-              return el('div',{
-                style:{
-                  padding:'3px 2px 1px 2px',
-                  borderRight:'1px solid var(--border)',
-                  borderBottom: shiftId === 'S3' ? 'none' : '1px solid var(--border)',
-                  background:isWE?'#fafafa':'transparent'
-                },
-                onClick: () => cycleDispo(dateStr, shiftId)
-              },
-                el('div',{style:{
-                  borderRadius:'4px', padding:'2px 3px', textAlign:'center',
-                  background:opt.bg, border:`1px solid ${isEdited?'#7c3aed':opt.border}`,
-                  cursor:'pointer', fontSize:'9px', fontWeight:'500', color:opt.text,
-                  outline: isEdited?'2px solid #7c3aed':'none',
-                  minHeight:'20px', display:'flex', alignItems:'center', justifyContent:'center'
-                }}, opt.label.split(' ')[0])
-              );
-            }),
-            // ── Doublon 19h-21h label — uniquement pour S3 (18h-00h)
-            ...(shiftId === 'S3' ? [
-              el('div',{style:{
-                padding:'2px 6px 4px 10px', display:'flex', alignItems:'center',
-                background:DOUBLON_COLOR.bg, borderRight:'1px solid var(--border)',
-                borderBottom:'1px solid var(--border)'
-              }},
-                el('span',{style:{fontSize:'9px',fontWeight:'600',color:DOUBLON_COLOR.text}}, '↻ 19h–21h')
-              ),
-              ...days.map(d => {
-                const dateStr = toISO(d);
-                const doublon = getCurrentDoublon(dateStr);
-                // Purple tones for doublon row regardless of status
-                const DOUBLON_OPTS = {
-                  preferred:   {bg:'#ede9fe', border:'#a78bfa', text:'#6d28d9', icon:'✓'},
-                  maybe:       {bg:'#f3e8ff', border:'#c4b5fd', text:'#7c3aed', icon:'?'},
-                  ask:         {bg:'#faf5ff', border:'#ddd6fe', text:'#8b5cf6', icon:'~'},
-                  unavailable: {bg:'#f5f3ff', border:'#e9d5ff', text:'#a78bfa', icon:'✗'},
-                };
-                const dopt = DOUBLON_OPTS[doublon] || DOUBLON_OPTS.unavailable;
-                const isWE = d.getDay()===0||d.getDay()===6;
-                return el('div',{
-                  style:{
-                    padding:'1px 2px 3px 2px', borderBottom:'1px solid var(--border)',
-                    borderRight:'1px solid var(--border)',
-                    background:isWE?'#fafafa':'transparent'
-                  },
-                  onClick: () => cycleDoublon(dateStr)
-                },
-                  el('div',{style:{
-                    borderRadius:'4px', padding:'2px 3px', textAlign:'center',
-                    background:dopt.bg, border:`1px solid ${dopt.border}`,
-                    cursor:'pointer', fontSize:'9px', fontWeight:'500', color:dopt.text,
-                    minHeight:'18px', display:'flex', alignItems:'center', justifyContent:'center',
-                  }}, dopt.icon)
-                );
-              })
-            ] : [])
-          ];
-        }).flat()
-      )
+    // View toggle (grid vs mobile list)
+    el('div',{style:{display:'flex',gap:'8px',marginBottom:'12px',alignItems:'center'}},
+      el('button',{
+        class:`btn ${STATE.dispoViewMode==='grid'?'btn-primary':'btn-secondary'}`,
+        style:{fontSize:'11px',padding:'4px 12px'},
+        onClick:()=>{STATE.dispoViewMode='grid';render();}
+      },'📅 Grille'),
+      el('button',{
+        class:`btn ${STATE.dispoViewMode==='list'?'btn-primary':'btn-secondary'}`,
+        style:{fontSize:'11px',padding:'4px 12px'},
+        onClick:()=>{STATE.dispoViewMode='list';render();}
+      },'📋 Liste (mobile)')
     ),
+
+    STATE.dispoViewMode === 'list'
+      ? buildMobileList()
+      : el('div',{style:{overflowX:'auto'}},
+          el('div',{style:{
+            background:'var(--surface)',border:'1px solid var(--border)',
+            borderRadius:'var(--radius-lg)',overflow:'hidden',minWidth:'520px'
+          }}, ...weeks_av.map(buildWeekDispo))
+        ),
+
 
     pendingCount > 0
       ? el('div',{style:{marginTop:'12px',textAlign:'right'}},
