@@ -3814,10 +3814,14 @@ function renderAvailableShifts() {
                   : el('button',{
                       class: myDispo === 'unavailable' ? 'btn btn-secondary' : 'btn btn-success',
                       style:{fontSize:'11px',padding:'4px 10px'},
-                      onClick:()=>{
-                        STATE.requests.push({id:Date.now(),type:'claim',agent:STATE.user,date:s.date,shiftId:s.shiftId,status:'pending'});
-                        showToast(t('requestSent'),'info');
-                        render();
+                      onClick: async ()=>{
+                        try {
+                          await dbAddRequest('claim', STATE.user, s.date, s.shiftId);
+                          showToast(t('requestSent'), 'info');
+                          render();
+                        } catch(e) {
+                          showToast('Erreur : ' + e.message, 'error');
+                        }
                       }
                     }, t('request'))
               )
