@@ -1742,6 +1742,120 @@ function renderEmailsAdmin() {
 }
 
 // ===================== AVAILABILITY INPUT (AGENT) =====================
+
+// ===================== DISPO AVAILABILITY HELPERS =====================
+const DISPO_OPTS = [
+  {val:'preferred', label:'✓ Disponible',   bg:'#dcfce7', border:'#86efac', text:'#15803d'},
+  {val:'maybe',     label:'? À confirmer',  bg:'#fef9c3', border:'#fde047', text:'#a16207'},
+  {val:'ask',       label:'~ Si besoin',    bg:'#ffedd5', border:'#fdba74', text:'#c2410c'},
+  {val:'unavailable',label:'✗ Indispo',     bg:'#fee2e2', border:'#fca5a5', text:'#b91c1c'},
+];
+
+const SHIFT_ORDER = ['S4','S1','S2','S3'];
+
+const SHIFT_COLORS_DISPO = {
+  S4:{label:'00h–06h ★',bg:'#ede9fe',border:'#c4b5fd',text:'#6d28d9'},
+  S1:{label:'06h–12h',  bg:'#dbeafe',border:'#93c5fd',text:'#1d4ed8'},
+  S2:{label:'12h–18h',  bg:'#fce7f3',border:'#f9a8d4',text:'#be185d'},
+  S3:{label:'18h–00h',  bg:'#d1fae5',border:'#6ee7b7',text:'#065f46'},
+};
+
+
+function getCurrentDispo(date, shiftId) {
+  const k = `${STATE.user}_${date}_${shiftId}`;
+  return STATE.availability[k]?.dispo || 'unavailable';
+}
+
+function cycleDispo(date, shiftId) {
+  const current = getCurrentDispo(date, shiftId);
+  const idx = DISPO_OPTS.findIndex(o => o.val === current);
+  const next = DISPO_OPTS[(idx+1) % DISPO_OPTS.length].val;
+  const k = `${STATE.user}_${date}_${shiftId}`;
+  STATE.availability[k] = {
+    dispo: next,
+    doublon: STATE.availability[k]?.doublon || 'unavailable'
+  };
+  STATE.dispoEdits[`${date}_${shiftId}`] = {dispo: next, doublon: STATE.availability[k].doublon};
+  render();
+}
+
+function cycleDoublon(date) {
+  // Doublon is always on S3 (18h-00h)
+  const k = `${STATE.user}_${date}_S3`;
+  const current = STATE.availability[k]?.doublon || 'unavailable';
+  const idx = DISPO_OPTS.findIndex(o => o.val === current);
+  const next = DISPO_OPTS[(idx+1) % DISPO_OPTS.length].val;
+  STATE.availability[k] = {
+    dispo: STATE.availability[k]?.dispo || 'unavailable',
+    doublon: next
+  };
+  const editKey = `${date}_S3`;
+  if (!STATE.dispoEdits[editKey]) {
+    STATE.dispoEdits[editKey] = {dispo: STATE.availability[k].dispo, doublon: next};
+  } else {
+    STATE.dispoEdits[editKey].doublon = next;
+  }
+  render();
+}
+
+async function saveAll() {
+  const editKeys = Object.keys(STATE.dispoEdits);
+  if (!editKeys.length) { showToast('Rien à sauvegarder','info'); return; }
+  STATE.syncing = true; render();
+  try {
+    let saved = 0;
+    let firstErr = null;
+    for (const [key, val] of Object.entries(STATE.dispoEdits)) {
+      const lastUnderscore = key.lastIndexOf('_');
+      const date    = key.substring(0, lastUnderscore);
+      const shiftId = key.substring(lastUnderscore + 1);
+      const row = [{
+        agent_id: STATE.user,
+        date:     date,
+        shift_id: shiftId,
+        dispo:    val.dispo    || 'unavailable',
+        doublon:  val.doublon  || 'unavailable'
+      }];
+      // Use direct fetch with full error details
+      const r = await fetch(
+        `${STATE.supabaseUrl}/rest/v1/availability?on_conflict=agent_id,date,shift_id`,
+        {
+          method: 'POST',
+          headers: {
+            'apikey': STATE.supabaseKey,
+            'Authorization': 'Bearer ' + STATE.supabaseKey,
+            'Content-Type': 'application/json',
+            'Prefer': 'resolution=merge-duplicates'
+          },
+          body: JSON.stringify(row)
+        }
+      );
+      if (!r.ok) {
+        const errText = await r.text();
+        firstErr = `HTTP ${r.status}: ${errText}`;
+        console.error('Save error for', key, firstErr);
+        break;
+      }
+      STATE.availability[`${STATE.user}_${date}_${shiftId}`] = {dispo: row[0].dispo, doublon: row[0].doublon};
+      saved++;
+    }
+    STATE.syncing = false;
+    if (firstErr) {
+      showToast('Erreur Supabase: ' + firstErr, 'error');
+    } else {
+      await trackDispoUpdate(STATE.user, saved).catch(()=>{});
+      STATE.dispoEdits = {};
+      showToast(`✓ ${saved} disponibilité(s) enregistrée(s)`);
+    }
+    render();
+  } catch(e) {
+    STATE.syncing = false;
+    showToast('Erreur réseau: ' + e.message, 'error');
+    console.error('saveAll network error:', e);
+    render();
+  }
+}
+
 function renderAvailabilityInput() {
   const year  = STATE.dispoMonth.getFullYear();
   const month = STATE.dispoMonth.getMonth();
@@ -1750,115 +1864,15 @@ function renderAvailabilityInput() {
   const nextM = () => { STATE.dispoMonth = new Date(year, month+1, 1); render(); };
 
   const days = getDaysInMonth(year, month);
-  const SHIFT_ORDER = ['S4','S1','S2','S3'];
-  const SHIFT_COLORS_DISPO = {
-    S4:{label:'00h–06h ★',bg:'#ede9fe',border:'#c4b5fd',text:'#6d28d9'},
-    S1:{label:'06h–12h',  bg:'#dbeafe',border:'#93c5fd',text:'#1d4ed8'},
-    S2:{label:'12h–18h',  bg:'#fce7f3',border:'#f9a8d4',text:'#be185d'},
-    S3:{label:'18h–00h',  bg:'#d1fae5',border:'#6ee7b7',text:'#065f46'},
-  };
 
-  const DISPO_OPTS = [
-    {val:'preferred', label:'✓ Disponible',   bg:'#dcfce7', border:'#86efac', text:'#15803d'},
-    {val:'maybe',     label:'? À confirmer',  bg:'#fef9c3', border:'#fde047', text:'#a16207'},
-    {val:'ask',       label:'~ Si besoin',    bg:'#ffedd5', border:'#fdba74', text:'#c2410c'},
-    {val:'unavailable',label:'✗ Indispo',     bg:'#fee2e2', border:'#fca5a5', text:'#b91c1c'},
-  ];
 
-  function getCurrentDispo(date, shiftId) {
-    const k = `${STATE.user}_${date}_${shiftId}`;
-    return STATE.availability[k]?.dispo || 'unavailable';
-  }
 
-  function cycleDispo(date, shiftId) {
-    const current = getCurrentDispo(date, shiftId);
-    const idx = DISPO_OPTS.findIndex(o => o.val === current);
-    const next = DISPO_OPTS[(idx+1) % DISPO_OPTS.length].val;
-    const k = `${STATE.user}_${date}_${shiftId}`;
-    STATE.availability[k] = {
-      dispo: next,
-      doublon: STATE.availability[k]?.doublon || 'unavailable'
-    };
-    STATE.dispoEdits[`${date}_${shiftId}`] = {dispo: next, doublon: STATE.availability[k].doublon};
-    render();
-  }
 
-  function cycleDoublon(date) {
-    // Doublon is always on S3 (18h-00h)
-    const k = `${STATE.user}_${date}_S3`;
-    const current = STATE.availability[k]?.doublon || 'unavailable';
-    const idx = DISPO_OPTS.findIndex(o => o.val === current);
-    const next = DISPO_OPTS[(idx+1) % DISPO_OPTS.length].val;
-    STATE.availability[k] = {
-      dispo: STATE.availability[k]?.dispo || 'unavailable',
-      doublon: next
-    };
-    const editKey = `${date}_S3`;
-    if (!STATE.dispoEdits[editKey]) {
-      STATE.dispoEdits[editKey] = {dispo: STATE.availability[k].dispo, doublon: next};
-    } else {
-      STATE.dispoEdits[editKey].doublon = next;
-    }
-    render();
-  }
 
-  async function saveAll() {
-    const editKeys = Object.keys(STATE.dispoEdits);
-    if (!editKeys.length) { showToast('Rien à sauvegarder','info'); return; }
-    STATE.syncing = true; render();
-    try {
-      let saved = 0;
-      let firstErr = null;
-      for (const [key, val] of Object.entries(STATE.dispoEdits)) {
-        const lastUnderscore = key.lastIndexOf('_');
-        const date    = key.substring(0, lastUnderscore);
-        const shiftId = key.substring(lastUnderscore + 1);
-        const row = [{
-          agent_id: STATE.user,
-          date:     date,
-          shift_id: shiftId,
-          dispo:    val.dispo    || 'unavailable',
-          doublon:  val.doublon  || 'unavailable'
-        }];
-        // Use direct fetch with full error details
-        const r = await fetch(
-          `${STATE.supabaseUrl}/rest/v1/availability?on_conflict=agent_id,date,shift_id`,
-          {
-            method: 'POST',
-            headers: {
-              'apikey': STATE.supabaseKey,
-              'Authorization': 'Bearer ' + STATE.supabaseKey,
-              'Content-Type': 'application/json',
-              'Prefer': 'resolution=merge-duplicates'
-            },
-            body: JSON.stringify(row)
-          }
-        );
-        if (!r.ok) {
-          const errText = await r.text();
-          firstErr = `HTTP ${r.status}: ${errText}`;
-          console.error('Save error for', key, firstErr);
-          break;
-        }
-        STATE.availability[`${STATE.user}_${date}_${shiftId}`] = {dispo: row[0].dispo, doublon: row[0].doublon};
-        saved++;
-      }
-      STATE.syncing = false;
-      if (firstErr) {
-        showToast('Erreur Supabase: ' + firstErr, 'error');
-      } else {
-        await trackDispoUpdate(STATE.user, saved).catch(()=>{});
-        STATE.dispoEdits = {};
-        showToast(`✓ ${saved} disponibilité(s) enregistrée(s)`);
-      }
-      render();
-    } catch(e) {
-      STATE.syncing = false;
-      showToast('Erreur réseau: ' + e.message, 'error');
-      console.error('saveAll network error:', e);
-      render();
-    }
-  }
+
+
+
+
 
   const pendingCount = Object.keys(STATE.dispoEdits).length;
 
