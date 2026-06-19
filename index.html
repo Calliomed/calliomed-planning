@@ -585,6 +585,7 @@ const STATE = {
   agentTab: 'grid',
   viewWeekStart: null,
   loginError: '',
+  openWeeks: new Set(), // Set of week keys like "2026-07-06" (Monday date)
   // Dispo input
   dispoMonth: new Date(2026, 5, 1),
   dispoEdits: {},    // key: "date_shiftId" => {dispo, doublon}
@@ -986,6 +987,7 @@ async function loadAllData() {
     }));
 
     // 5. Rebuild availData structure for compatibility with existing render functions
+    await loadOpenWeeks();
     rebuildAvailData();
     updateNightCounts();
     STATE.loading = false;
@@ -1239,6 +1241,8 @@ function renderSetup() {
 CREATE TABLE availability (id BIGSERIAL PRIMARY KEY, agent_id TEXT, date DATE, shift_id TEXT, dispo TEXT DEFAULT 'unavailable', doublon TEXT DEFAULT 'unavailable', updated_at TIMESTAMPTZ DEFAULT NOW(), UNIQUE(agent_id,date,shift_id));
 CREATE TABLE assignments (id BIGSERIAL PRIMARY KEY, date DATE, shift_id TEXT, agent_id TEXT, type TEXT DEFAULT 'main', assigned_by TEXT, assigned_at TIMESTAMPTZ DEFAULT NOW(), UNIQUE(date,shift_id,agent_id,type));
 CREATE TABLE requests (id BIGSERIAL PRIMARY KEY, type TEXT, agent_id TEXT, date DATE, shift_id TEXT, reason TEXT, status TEXT DEFAULT 'pending', created_at TIMESTAMPTZ DEFAULT NOW());
+CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
+CREATE POLICY "pub" ON settings FOR ALL USING (true) WITH CHECK (true);
 ALTER TABLE agents ENABLE ROW LEVEL SECURITY; ALTER TABLE availability ENABLE ROW LEVEL SECURITY; ALTER TABLE assignments ENABLE ROW LEVEL SECURITY; ALTER TABLE requests ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "pub" ON agents FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "pub" ON availability FOR ALL USING (true) WITH CHECK (true);
@@ -1702,6 +1706,85 @@ function shortName(agentId) {
   const firstName = parts[0];
   const lastInitial = parts[parts.length-1][0].toUpperCase();
   return firstName + ' ' + lastInitial + '.';
+}
+
+
+// ── Week open/close helpers ────────────────────────────────────────────────
+function weekKey(monday) {
+  return toISO(monday); // e.g. "2026-07-06"
+}
+
+function isWeekOpen(monday) {
+  return STATE.openWeeks.has(weekKey(monday));
+}
+
+async function toggleWeek(monday) {
+  const key = weekKey(monday);
+  if (STATE.openWeeks.has(key)) {
+    STATE.openWeeks.delete(key);
+  } else {
+    STATE.openWeeks.add(key);
+  }
+  await saveOpenWeeks();
+  render();
+}
+
+async function saveOpenWeeks() {
+  const arr = [...STATE.openWeeks];
+  try {
+    await sbUpsert('settings', [{key: 'open_weeks', value: JSON.stringify(arr)}], 'key');
+  } catch(e) {
+    // Fallback to localStorage if settings table doesn't exist
+    localStorage.setItem('open_weeks', JSON.stringify(arr));
+  }
+}
+
+async function loadOpenWeeks() {
+  try {
+    const rows = await sbGet('settings', 'key=eq.open_weeks');
+    if (rows.length > 0) {
+      const arr = JSON.parse(rows[0].value || '[]');
+      STATE.openWeeks = new Set(arr);
+      return;
+    }
+  } catch(e) {}
+  // Fallback to localStorage
+  try {
+    const local = localStorage.getItem('open_weeks');
+    if (local) STATE.openWeeks = new Set(JSON.parse(local));
+  } catch(e) {}
+}
+
+function autoOpenWeeks(days, weeks) {
+  // Open weeks where at least 2 shifts per day are already assigned (on average)
+  weeks.forEach(weekDays => {
+    const monday = weekDays.find(d => d.getDay() === 1) || weekDays[0];
+    let coveredDays = 0;
+    weekDays.forEach(d => {
+      const dateStr = toISO(d);
+      let assignedCount = 0;
+      SHIFT_DISPLAY_ORDER.forEach(shiftId => {
+        const lookupDate = storageDate(dateStr, shiftId);
+        const assigns = getAssignments(lookupDate, shiftId).filter(a=>a.type==='main');
+        if (assigns.length > 0) assignedCount++;
+      });
+      if (assignedCount >= 2) coveredDays++;
+    });
+    const key = weekKey(monday);
+    if (coveredDays >= Math.ceil(weekDays.length / 2)) {
+      STATE.openWeeks.add(key);
+    }
+  });
+  saveOpenWeeks();
+  render();
+}
+
+// Check if a specific slot is demandable by agents
+function isSlotOpen(dateStr, shiftId) {
+  // Find the monday of this date's week
+  const d = new Date(dateStr + 'T12:00:00');
+  const monday = getMonday(d);
+  return STATE.openWeeks.has(weekKey(monday));
 }
 
 // ===================== HELPERS =====================
@@ -2470,18 +2553,33 @@ function renderPlanning() {
   function renderWeek(weekDays) {
     const weekLabel = `Semaine du ${weekDays[0].getDate()} ${t(MONTH_KEYS[weekDays[0].getMonth()])}`;
 
+    // Find Monday for this week
+    const weekMonday = weekDays.find(d => d.getDay() === 1) || weekDays[0];
+    const weekOpen = isWeekOpen(weekMonday);
+
     // Header row for this week
     const header = el('div', {style:{
       display:'grid',
       gridTemplateColumns:`90px repeat(${weekDays.length}, 1fr)`,
-      background:'var(--bg)',
+      background: weekOpen ? '#f0fdf4' : 'var(--bg)',
       borderBottom:'1px solid var(--border)',
-      borderTop:'2px solid var(--border2)',
+      borderTop: weekOpen ? '2px solid var(--green-border)' : '2px solid var(--border2)',
       marginTop:'12px'
     }},
       el('div',{style:{padding:'5px 8px',fontSize:'10px',fontWeight:'600',color:'var(--text3)',
-        textTransform:'uppercase',letterSpacing:'0.5px',display:'flex',alignItems:'center'}},
-        weekLabel),
+        textTransform:'uppercase',letterSpacing:'0.5px',display:'flex',alignItems:'center',gap:'8px'}},
+        weekLabel,
+        el('button',{
+          style:{
+            fontSize:'10px', padding:'2px 8px', borderRadius:'99px', cursor:'pointer',
+            background: weekOpen ? 'var(--green-bg)' : 'var(--red-bg)',
+            color: weekOpen ? 'var(--green)' : 'var(--red)',
+            border: `1px solid ${weekOpen ? 'var(--green-border)' : 'var(--red-border)'}`,
+            fontWeight:'600', whiteSpace:'nowrap'
+          },
+          onClick: e => { e.stopPropagation(); toggleWeek(weekMonday); }
+        }, weekOpen ? '🔓 Ouverte aux demandes' : '🔒 Fermée')
+      ),
       ...weekDays.map(d => {
         const isWE = d.getDay()===0||d.getDay()===6;
         const isToday = toISO(d) === toISO(new Date());
@@ -2599,13 +2697,38 @@ function renderPlanning() {
                     fontSize:'10px', fontWeight:'600',
                     border:'1px solid #f48fb1',
                     marginTop:'2px',
-                    display:'flex', alignItems:'center', gap:'2px',
+                    display:'flex', alignItems:'center', justifyContent:'space-between', gap:'4px',
                     boxShadow: isConflict ? '0 0 0 1.5px #e91e63' : 'none'
                   },
                   title: displayName(r.agent) + ' — demande en attente' + (isConflict ? ' ⚠ DOUBLON' : '')
                 },
-                  '📩 ' + shortName(r.agent),
-                  isConflict ? el('span',{style:{fontSize:'9px',color:'#e91e63'}},' ⚠') : null
+                  el('span',{}, '📩 ' + shortName(r.agent) + (isConflict?' ⚠':'')),
+                  el('span',{style:{display:'flex',gap:'2px'}},
+                    el('button',{
+                      style:{fontSize:'9px',padding:'1px 4px',borderRadius:'3px',border:'1px solid #86efac',background:'#dcfce7',color:'#15803d',cursor:'pointer',fontWeight:'700'},
+                      onClick: async e => {
+                        e.stopPropagation();
+                        const req = STATE.requests.find(x=>x.id===r.id);
+                        if (!req) return;
+                        await dbUpdateRequest(req.id,'approved');
+                        setAssignment(req.date, req.shiftId, req.agent);
+                        await dbSetAssignment(req.date, req.shiftId, req.agent);
+                        showToast(t('requestApproved'));
+                        render();
+                      }
+                    },'✓'),
+                    el('button',{
+                      style:{fontSize:'9px',padding:'1px 4px',borderRadius:'3px',border:'1px solid #fca5a5',background:'#fee2e2',color:'#b91c1c',cursor:'pointer',fontWeight:'700'},
+                      onClick: async e => {
+                        e.stopPropagation();
+                        const req = STATE.requests.find(x=>x.id===r.id);
+                        if (!req) return;
+                        await dbUpdateRequest(req.id,'rejected');
+                        showToast(t('requestRejected'),'info');
+                        render();
+                      }
+                    },'✗')
+                  )
                 );
               });
             })()
@@ -2641,6 +2764,10 @@ function renderPlanning() {
           showToast('Planning actualisé ✓');
           render();
         }}, '🔄'),
+        el('button',{class:'btn btn-secondary',style:{fontSize:'12px'},onClick:()=>{
+          autoOpenWeeks(days, weeks);
+          showToast('Semaines ouvertes automatiquement ✓');
+        }}, '🔓 Ouvrir auto'),
         el('button',{class:'btn btn-secondary',onClick:exportCSV},'⬇ '+t('export'))
       )
     ),
@@ -2836,17 +2963,21 @@ function renderMyShifts() {
                 }
               }, '✗ Attribué');
             } else {
-              // Unassigned — show "Disponible"
+              // Unassigned — show "Disponible" only if week is open
+              const slotIsOpen = isSlotOpen(dateStr, shiftId);
               cellContent = el('div', {
                 style:{
                   margin:'3px', padding:'3px 5px', borderRadius:'5px',
-                  background:'#f0fdf4', border:'1px dashed #86efac',
-                  fontSize:'10px', color:'#15803d', cursor:'pointer'
+                  background: slotIsOpen ? '#f0fdf4' : 'var(--bg)',
+                  border: slotIsOpen ? '1px dashed #86efac' : '1px solid var(--border)',
+                  fontSize:'10px',
+                  color: slotIsOpen ? '#15803d' : 'var(--text3)',
+                  cursor: slotIsOpen ? 'pointer' : 'default'
                 },
-                onClick: ()=>{
+                onClick: slotIsOpen ? ()=>{
                   dbAddRequest('claim',STATE.user,storageDate(dateStr,shiftId),shiftId).then(()=>{showToast(t('requestSent'),'info');render();}).catch(e=>showToast(e.message,'error'));
-                }
-              }, '+ Disponible');
+                } : null
+              }, slotIsOpen ? '+ Disponible' : '—');
             }
 
             return el('div', {style:{
@@ -2961,7 +3092,8 @@ function renderAvailableShifts() {
       if (!STATE.availData?.slots[key]) return;
       const assigns = getAssignments(lookupDate, shiftId);
       const myAssign = assigns.find(a => a.agent === STATE.user);
-      if (!myAssign && assigns.length === 0) {
+      // Only show shifts from open weeks
+      if (!myAssign && assigns.length === 0 && isSlotOpen(dateStr, shiftId)) {
         available.push({date: dateStr, shiftId, lookupDate, dispo: getAgentDispo(lookupDate, shiftId, STATE.user)});
       }
     });
