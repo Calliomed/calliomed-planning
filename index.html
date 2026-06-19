@@ -1089,14 +1089,19 @@ async function silentRefresh() {
       reason: r.reason, status: r.status
     }));
     const avail = await sbGet('availability', 'order=date,shift_id&limit=50000');
-    STATE.availability = {};
-    avail.forEach(row => {
-      STATE.availability[`${row.agent_id}_${row.date}_${row.shift_id}`] = {
-        dispo: row.dispo, doublon: row.doublon
-      };
-    });
-    rebuildAvailData();
-    updateNightCounts();
+    // Only overwrite availability if agent has no pending unsaved edits
+    // Otherwise the refresh would erase their in-progress work
+    const hasPendingEdits = Object.keys(STATE.dispoEdits || {}).length > 0;
+    if (!hasPendingEdits) {
+      STATE.availability = {};
+      avail.forEach(row => {
+        STATE.availability[`${row.agent_id}_${row.date}_${row.shift_id}`] = {
+          dispo: row.dispo, doublon: row.doublon
+        };
+      });
+      rebuildAvailData();
+      updateNightCounts();
+    }
     // Show notification if new pending requests appeared
     const newPending = STATE.requests.filter(r=>r.status==='pending').length;
     if (newPending > 0) {
@@ -1792,8 +1797,11 @@ function renderAvailabilityInput() {
     STATE.syncing = true; render();
     try {
       const rows = Object.entries(STATE.dispoEdits).map(([key, val]) => {
-        const [date, shiftId] = key.split('_');
-        return {agent_id: STATE.user, date, shift_id: shiftId, dispo: val.dispo, doublon: val.doublon};
+        // Key format: "2026-06-27_S4" — date contains dashes, shiftId is last segment
+        const lastUnderscore = key.lastIndexOf('_');
+        const date = key.substring(0, lastUnderscore);    // "2026-06-27"
+        const shiftId = key.substring(lastUnderscore + 1); // "S4"
+        return {agent_id: STATE.user, date, shift_id: shiftId, dispo: val.dispo, doublon: val.doublon || 'unavailable'};
       });
       await sbUpsert('availability', rows, 'agent_id,date,shift_id');
       // Track update time and count
