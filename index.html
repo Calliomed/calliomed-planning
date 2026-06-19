@@ -970,6 +970,20 @@ async function sbGet(table, params='') {
   return r.json();
 }
 
+async function sbGetRange(table, from, to) {
+  const r = await fetch(`${STATE.supabaseUrl}/rest/v1/${table}?order=id.asc`, {
+    headers: {
+      ...sbHeaders(),
+      'Range': `${from}-${to}`,
+      'Range-Unit': 'items',
+      'Cache-Control': 'no-cache'
+    },
+    cache: 'no-store'
+  });
+  if (!r.ok && r.status !== 206) throw new Error(`GET ${table}: ${r.status} ${await r.text()}`);
+  return r.json();
+}
+
 async function sbPost(table, body) {
   const r = await fetch(`${STATE.supabaseUrl}/rest/v1/${table}`, {
     method:'POST', headers: sbHeaders(), body: JSON.stringify(body)
@@ -1039,18 +1053,15 @@ async function loadAllData() {
     }
 
     // 2. Availability (all entries — no date filter, load everything)
-    const avail = await sbGet('availability', 'order=id.asc&limit=50000');
-    console.log('[INIT] Availability rows from Supabase:', avail.length);
-    // Log a few rows to verify values
-    avail.filter(r => r.agent_id === 'xavier_sohy' && r.date >= '2026-07-29').forEach(r =>
-      console.log('[INIT]', r.agent_id, r.date, r.shift_id, r.dispo, 'id='+r.id)
-    );
+    // Load up to 4000 availability rows
     STATE.availability = {};
+    const avail = await sbGetRange('availability', 0, 3999);
     avail.forEach(row => {
       STATE.availability[`${row.agent_id}_${row.date}_${row.shift_id}`] = {
         dispo: row.dispo, doublon: row.doublon
       };
     });
+    console.log('[INIT] Loaded', avail.length, 'availability rows');
 
     // 3. Assignments
     const assigns = await sbGet('assignments', 'order=date,shift_id');
