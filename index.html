@@ -1347,6 +1347,10 @@ function renderAgents() {
   async function addAgent() {
     if (!form.name.trim()) { form.error = 'Le nom est obligatoire.'; render(); return; }
     if (!form.pwd.trim() || form.pwd.length < 3) { form.error = 'Mot de passe requis (3 caractères min).'; render(); return; }
+    if (form.email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) {
+      form.error = "Email invalide — vérifiez le format (ex: prenom.nom@gmail.com).";
+      render(); return;
+    }
 
     // Generate ID from name
     const id = form.name.trim().toLowerCase()
@@ -1498,15 +1502,15 @@ function renderAgents() {
             onChange: e=>form.role=e.target.value,
             style:{width:'100%',padding:'8px 10px',border:'1px solid var(--border2)',borderRadius:'var(--radius)',fontSize:'13px',background:'var(--bg)',color:'var(--text)'}
           },
-            el('option',{value:'agent',selected:form.role==='agent'?'true':null},'👤 Agent'),
+            el('option',{value:'agent',selected:form.role!=='admin'?'true':null},'👤 Agent'),
             el('option',{value:'admin',selected:form.role==='admin'?'true':null},'⚙️ Administrateur')
           )
         ),
         el('div', {class:'field',style:{margin:'0'}},
           el('label',{}, 'Email'),
           el('input',{
-            type:'email', placeholder:'prenom@exemple.com', value: form.email,
-            onInput: e=>{form.email=e.target.value;},
+            type:'email', placeholder:'prenom.nom@gmail.com', value: form.email,
+            onInput: e=>{form.email=e.target.value; form.error='';},
             style:{width:'100%',padding:'8px 10px',border:'1px solid var(--border2)',borderRadius:'var(--radius)',fontSize:'13px',background:'var(--bg)',color:'var(--text)'}
           })
         ),
