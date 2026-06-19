@@ -2091,7 +2091,7 @@ function renderAvailabilityInput() {
       ),
       el('div', {class:'header-actions'},
         pendingCount > 0
-          ? el('button', {class:'btn btn-primary', onClick: saveAll},
+          ? el('button', {class:'btn btn-primary', onClick: ()=>saveAll()},
               STATE.syncing ? '⏳ Sauvegarde...' : `💾 Sauvegarder (${pendingCount} modif.)`
             )
           : el('button', {class:'btn btn-secondary', style:{opacity:'0.5'}}, '✓ À jour')
@@ -2142,7 +2142,7 @@ function renderAvailabilityInput() {
 
     pendingCount > 0
       ? el('div',{style:{marginTop:'12px',textAlign:'right'}},
-          el('button',{class:'btn btn-primary',onClick:saveAll},
+          el('button',{class:'btn btn-primary',onClick:()=>saveAll()},
             STATE.syncing ? '⏳ Sauvegarde...' : `💾 Sauvegarder (${pendingCount} modif.)`)
         )
       : null
