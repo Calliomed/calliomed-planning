@@ -585,7 +585,9 @@ const STATE = {
   agentTab: 'grid',
   viewWeekStart: null,
   loginError: '',
-  openWeeks: new Set(), // Set of week keys like "2026-07-06" (Monday date)
+  openWeeks: new Set(),
+  emailTemplates: null,  // loaded from Supabase settings
+  dispoLastUpdate: {},   // agentId -> {date, count}
   // Dispo input
   dispoMonth: new Date(2026, 5, 1),
   dispoEdits: {},    // key: "date_shiftId" => {dispo, doublon}
@@ -988,6 +990,8 @@ async function loadAllData() {
 
     // 5. Rebuild availData structure for compatibility with existing render functions
     await loadOpenWeeks();
+    await loadEmailTemplates();
+    await loadDispoUpdates();
     rebuildAvailData();
     updateNightCounts();
     STATE.loading = false;
@@ -1505,6 +1509,10 @@ function renderAvailabilityInput() {
         return {agent_id: STATE.user, date, shift_id: shiftId, dispo: val.dispo, doublon: val.doublon};
       });
       await sbUpsert('availability', rows, 'agent_id,date,shift_id');
+      // Track update time and count
+      const totalCount = Object.keys(STATE.availability)
+        .filter(k => k.startsWith(STATE.user + '_')).length;
+      await trackDispoUpdate(STATE.user, totalCount).catch(()=>{});
       STATE.dispoEdits = {};
       STATE.syncing = false;
       showToast('Disponibilités enregistrées ✓');
@@ -1785,6 +1793,142 @@ function isSlotOpen(dateStr, shiftId) {
   const d = new Date(dateStr + 'T12:00:00');
   const monday = getMonday(d);
   return STATE.openWeeks.has(weekKey(monday));
+}
+
+
+// ── Default email templates ───────────────────────────────────────────────
+const DEFAULT_EMAIL_TEMPLATES = {
+  dispo_request: {
+    label: "Demande de disponibilités (envoyé le 1er du mois)",
+    subject: "📅 Calliomed — Disponibilités {{mois}} à encoder avant le {{date_limite}}",
+    body: `Bonjour {{prenom}},
+
+Merci d'encoder vos disponibilités pour le mois de {{mois}} avant le {{date_limite}}.
+
+👉 Connectez-vous ici : {{lien_app}}
+
+Allez dans "✏️ Mes disponibilités" et cliquez sur chaque créneau pour indiquer votre statut :
+✓ Vert = Disponible  |  ? Jaune = À confirmer  |  ~ Orange = Si besoin  |  ✗ Rouge = Indisponible
+
+N'oubliez pas de cliquer sur 💾 Sauvegarder une fois terminé.
+
+Merci pour votre réactivité !
+
+Mélanie — Calliomed Planning`,
+    variables: ['{{prenom}}', '{{mois}}', '{{date_limite}}', '{{lien_app}}']
+  },
+  planning_send: {
+    label: "Envoi du planning validé",
+    subject: "📋 Calliomed — Votre planning {{mois}}",
+    body: `Bonjour {{prenom}},
+
+Voici vos shifts attribués pour {{mois}} :
+
+{{liste_shifts}}
+
+Total : {{nb_shifts}} shift(s) dont {{nb_nuits}} shift(s) de nuit.
+
+👉 Consultez votre planning en ligne : {{lien_app}}
+
+Si vous avez un empêchement pour l'un de ces shifts, connectez-vous à l'application et utilisez le bouton "Rejeter" — votre demande sera traitée rapidement.
+
+Bonne continuation !
+
+Mélanie — Calliomed Planning`,
+    variables: ['{{prenom}}', '{{mois}}', '{{liste_shifts}}', '{{nb_shifts}}', '{{nb_nuits}}', '{{lien_app}}']
+  },
+  request_result: {
+    label: "Résultat d'une demande (approbation ou rejet)",
+    subject: "{{statut_emoji}} Calliomed — Votre demande pour le {{date_shift}}",
+    body: `Bonjour {{prenom}},
+
+Votre demande concernant le shift {{horaire}} du {{date_shift}} a été {{statut}}.
+
+{{message_complementaire}}
+
+👉 Consultez votre planning : {{lien_app}}
+
+Mélanie — Calliomed Planning`,
+    variables: ['{{prenom}}', '{{date_shift}}', '{{horaire}}', '{{statut}}', '{{statut_emoji}}', '{{message_complementaire}}', '{{lien_app}}']
+  },
+  relance: {
+    label: "Relance individuelle (disponibilités non encodées)",
+    subject: "⏰ Calliomed — Rappel : vos disponibilités {{mois}} attendues avant le {{date_limite}}",
+    body: `Bonjour {{prenom}},
+
+Je me permets de vous relancer car je n'ai pas encore reçu vos disponibilités pour {{mois}}.
+
+Merci de les encoder avant le {{date_limite}} afin que je puisse finaliser le planning dans les meilleures conditions.
+
+👉 Accès rapide : {{lien_app}}
+
+Merci d'avance !
+
+Mélanie — Calliomed Planning`,
+    variables: ['{{prenom}}', '{{mois}}', '{{date_limite}}', '{{lien_app}}']
+  },
+  welcome: {
+    label: "Bienvenue (nouveau compte créé)",
+    subject: "🏥 Calliomed — Bienvenue dans l'équipe planning !",
+    body: `Bonjour {{prenom}},
+
+Votre compte Calliomed Planning vient d'être créé. Vous pouvez dès maintenant accéder à l'application.
+
+👉 Lien d'accès : {{lien_app}}
+
+Vos identifiants de connexion :
+• Nom : {{prenom}} {{nom}}
+• Mot de passe initial : {{mot_de_passe}}
+
+💡 Pensez à changer votre mot de passe dès votre première connexion (bouton "🔑 Changer mon mot de passe" en bas du menu).
+
+Bienvenue dans l'équipe !
+
+Mélanie — Calliomed Planning`,
+    variables: ['{{prenom}}', '{{nom}}', '{{mot_de_passe}}', '{{lien_app}}']
+  }
+};
+
+function getTemplates() {
+  return STATE.emailTemplates || JSON.parse(JSON.stringify(DEFAULT_EMAIL_TEMPLATES));
+}
+
+async function loadEmailTemplates() {
+  try {
+    const rows = await sbGet('settings', 'key=eq.email_templates');
+    if (rows.length > 0) {
+      STATE.emailTemplates = JSON.parse(rows[0].value);
+    } else {
+      STATE.emailTemplates = JSON.parse(JSON.stringify(DEFAULT_EMAIL_TEMPLATES));
+    }
+  } catch(e) {
+    STATE.emailTemplates = JSON.parse(JSON.stringify(DEFAULT_EMAIL_TEMPLATES));
+  }
+}
+
+async function saveEmailTemplates() {
+  await sbUpsert('settings', [{key: 'email_templates', value: JSON.stringify(STATE.emailTemplates)}], 'key');
+}
+
+// Track dispo updates
+async function trackDispoUpdate(agentId, count) {
+  const now = new Date().toISOString();
+  STATE.dispoLastUpdate[agentId] = {date: now, count};
+  try {
+    const existing = await sbGet('settings', `key=eq.dispo_updates`);
+    let all = existing.length > 0 ? JSON.parse(existing[0].value) : {};
+    all[agentId] = {date: now, count};
+    await sbUpsert('settings', [{key: 'dispo_updates', value: JSON.stringify(all)}], 'key');
+  } catch(e) {}
+}
+
+async function loadDispoUpdates() {
+  try {
+    const rows = await sbGet('settings', 'key=eq.dispo_updates');
+    if (rows.length > 0) {
+      STATE.dispoLastUpdate = JSON.parse(rows[0].value);
+    }
+  } catch(e) {}
 }
 
 // ===================== HELPERS =====================
@@ -2388,6 +2532,7 @@ function renderSidebar() {
       isAdmin ? navBtn('planning',  '📅', t('planning')) : null,
       isAdmin ? navBtn('requests',  '🔔', t('requests') + (STATE.requests.filter(r=>r.status==='pending').length > 0 ? ` (${STATE.requests.filter(r=>r.status==='pending').length})` : '')) : null,
       isAdmin ? navBtn('agents',    '👥', 'Gestion agents') : null,
+      isAdmin ? navBtn('emails',    '✉️',  'Emails & suivi') : null,
       isAdmin ? navBtn('nightcount','🌙', t('nightCount')) : null,
       isAdmin ? navBtn('import',    '📥', t('import')) : null,
       
@@ -3459,6 +3604,7 @@ function render() {
       STATE.page === 'nightcount' ? renderNightCount() :
       STATE.page === 'requests'   ? renderRequests() :
       STATE.page === 'agents'     ? renderAgents() :
+      STATE.page === 'emails'     ? renderEmailsAdmin() :
       STATE.page === 'import'     ? renderImport() :
       STATE.page === 'changepwd'  ? renderChangePassword() :
       el('div', {}, 'Page inconnue')
