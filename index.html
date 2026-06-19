@@ -1768,6 +1768,25 @@ function renderAvailabilityInput() {
     render();
   }
 
+  function cycleDoublon(date) {
+    // Doublon is always on S3 (18h-00h)
+    const k = `${STATE.user}_${date}_S3`;
+    const current = STATE.availability[k]?.doublon || 'unavailable';
+    const idx = DISPO_OPTS.findIndex(o => o.val === current);
+    const next = DISPO_OPTS[(idx+1) % DISPO_OPTS.length].val;
+    STATE.availability[k] = {
+      dispo: STATE.availability[k]?.dispo || 'unavailable',
+      doublon: next
+    };
+    const editKey = `${date}_S3`;
+    if (!STATE.dispoEdits[editKey]) {
+      STATE.dispoEdits[editKey] = {dispo: STATE.availability[k].dispo, doublon: next};
+    } else {
+      STATE.dispoEdits[editKey].doublon = next;
+    }
+    render();
+  }
+
   async function saveAll() {
     if (!Object.keys(STATE.dispoEdits).length) { showToast('Rien à sauvegarder','info'); return; }
     STATE.syncing = true; render();
@@ -1871,27 +1890,30 @@ function renderAvailabilityInput() {
       }},
         el('div',{style:{padding:'3px 6px',display:'flex',flexDirection:'column',justifyContent:'center',
           background:sc.bg,borderRight:'1px solid var(--border)'}},
-          el('span',{style:{fontSize:'9px',fontWeight:'700',color:sc.text}}, sc.label)
+          el('span',{style:{fontSize:'9px',fontWeight:'700',color:sc.text}}, sc.label),
         ),
         ...weekDays.map(d => {
           const ds = toISO(d);
           const outM = !inMonth(d);
           if (outM) return el('div',{style:{borderRight:'1px solid var(--border)',background:'var(--bg)',opacity:'0.2'}});
+          const isPast = new Date(ds + 'T23:59:59') < new Date();
           const dispo = getCurrentDispo(ds, shiftId);
           const opt = DISPO_OPTS.find(o=>o.val===dispo)||DISPO_OPTS[3];
           const isEd = !!STATE.dispoEdits[`${ds}_${shiftId}`];
           return el('div',{
             style:{padding:'2px 1px',borderRight:'1px solid var(--border)',
               background:isWE_av(d)?'#fafafa':'transparent'},
-            onClick:()=>cycleDispo(ds,shiftId)
+            onClick:isPast?null:()=>cycleDispo(ds,shiftId)
           },
             el('div',{style:{
               borderRadius:'3px',padding:'2px',textAlign:'center',
-              background:opt.bg,border:`1px solid ${isEd?'#7c3aed':opt.border}`,
-              cursor:'pointer',fontSize:'9px',fontWeight:'600',color:opt.text,
+              background:isPast?'#e5e5e5':opt.bg,
+              border:`1px solid ${isPast?'#ccc':isEd?'#7c3aed':opt.border}`,
+              cursor:isPast?'default':'pointer',fontSize:'9px',fontWeight:'600',
+              color:isPast?'#aaa':opt.text,
               minHeight:'20px',display:'flex',alignItems:'center',justifyContent:'center',
-              outline:isEd?'2px solid #7c3aed':'none'
-            }}, opt.label.split(' ')[0])
+              outline:isEd&&!isPast?'2px solid #7c3aed':'none'
+            }}, isPast?'·':opt.label.split(' ')[0])
           );
         })
       );
@@ -1908,20 +1930,23 @@ function renderAvailabilityInput() {
           const ds = toISO(d);
           const outM = !inMonth(d);
           if (outM) return el('div',{style:{borderRight:'1px solid var(--border)',background:'var(--bg)',opacity:'0.2'}});
+          const isPastD = new Date(ds + 'T23:59:59') < new Date();
           const k = `${STATE.user}_${ds}_S3`;
           const dbl = STATE.availability[k]?.doublon||'unavailable';
           const dopt = DBO_AV[dbl]||DBO_AV.unavailable;
           return el('div',{
             style:{padding:'1px 1px 2px',borderRight:'1px solid var(--border)',
               background:isWE_av(d)?'#fafafa':'transparent'},
-            onClick:()=>cycleDoublon(ds)
+            onClick:isPastD?null:()=>cycleDoublon(ds)
           },
             el('div',{style:{
               borderRadius:'3px',padding:'2px',textAlign:'center',
-              background:dopt.bg,border:`1px solid ${dopt.border}`,
-              cursor:'pointer',fontSize:'9px',fontWeight:'600',color:dopt.text,
+              background:isPastD?'#e5e5e5':dopt.bg,
+              border:`1px solid ${isPastD?'#ccc':dopt.border}`,
+              cursor:isPastD?'default':'pointer',fontSize:'9px',fontWeight:'600',
+              color:isPastD?'#aaa':dopt.text,
               minHeight:'16px',display:'flex',alignItems:'center',justifyContent:'center'
-            }}, dopt.icon)
+            }}, isPastD?'·':dopt.icon)
           );
         })
       ) : null;
@@ -2331,10 +2356,9 @@ function get4WeekDays(startMonday) {
 }
 
 function storageDate(displayDate, shiftId) {
-  if (shiftId !== 'S4') return displayDate;
-  const d = new Date(displayDate + 'T12:00:00');
-  d.setDate(d.getDate() - 1);
-  return toISO(d);
+  // No offset — agents and admin always use the same date
+  // (Excel import legacy data had J-1 offset, but new app data uses display date)
+  return displayDate;
 }
 
 // ── Global constants used across multiple pages ───────────────────────────
@@ -2413,10 +2437,9 @@ function updateNightCounts() {
   const monthEnd   = new Date(year, month + 1, 0);
   Object.entries(STATE.assignments).forEach(([key, agents]) => {
     if (!key.endsWith('_S4')) return;
-    const stored = key.replace('_S4','');
-    const display = new Date(stored + 'T12:00:00');
-    display.setDate(display.getDate() + 1);
-    if (display < monthStart || display > monthEnd) return;
+    const dateStr = key.replace('_S4','');
+    const d = new Date(dateStr + 'T12:00:00');
+    if (d < monthStart || d > monthEnd) return;
     agents.filter(a=>a.type==='main').forEach(a => {
       STATE.nightCounts[a.agent] = (STATE.nightCounts[a.agent] || 0) + 1;
     });
@@ -3120,15 +3143,14 @@ function renderPlanning() {
   // S4 display date = stored date + 1 day
   // For month M: display dates are 1st to last day of M
   // So stored dates run from last day of M-1 to second-to-last day of M
-  const monthStart = new Date(year, month, 1);    // June 1
-  const monthEnd   = new Date(year, month + 1, 0); // June 30
+  const monthStart = new Date(year, month, 1);
+  const monthEnd   = new Date(year, month + 1, 0);
   const nightSlots = Object.entries(STATE.assignments)
     .filter(([k]) => {
       if (!k.endsWith('_S4')) return false;
-      const stored = k.replace('_S4','');
-      const display = new Date(stored + 'T12:00:00');
-      display.setDate(display.getDate() + 1); // display = stored + 1
-      return display >= monthStart && display <= monthEnd;
+      const dateStr = k.replace('_S4','');
+      const d = new Date(dateStr + 'T12:00:00');
+      return d >= monthStart && d <= monthEnd;
     })
     .reduce((n,[,v]) => n + v.filter(a=>a.type==='main').length, 0);
 
