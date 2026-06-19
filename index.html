@@ -1,10 +1,11 @@
 <!DOCTYPE html>
+<!-- Calliomed v5.2 - 2026-06-18T15:28:55.623672 -->
 <html lang="fr">
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Calliomed — Planning v5.1</title>
+<title>Calliomed — Planning v5.2</title>
 <style>
 :root {
   --bg: #f7f6f3;
@@ -703,6 +704,7 @@ async function sendDispoRequests() {
   let sent = 0, errors = 0;
 
   for (const ag of agents) {
+    if (onlyIds && !onlyIds.includes(ag.id)) continue;
     const contact = agentEmail(ag.id);
     if (!contact.email) continue;
     const html = `
@@ -732,7 +734,7 @@ async function sendDispoRequests() {
 }
 
 // ── Email : planning personnel envoyé à chaque agent ──────────────────────
-async function sendPlanningToAgents() {
+async function sendPlanningToAgents(onlyIds=null) {
   const MONTH_KEYS = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
   const year  = STATE.viewMonth.getFullYear();
   const month = STATE.viewMonth.getMonth();
@@ -745,6 +747,7 @@ async function sendPlanningToAgents() {
   let sent = 0, errors = 0;
 
   for (const ag of agents) {
+    if (onlyIds && !onlyIds.includes(ag.id)) continue;
     const contact = agentEmail(ag.id);
     if (!contact.email) continue;
 
@@ -1245,6 +1248,193 @@ function renderLoadingScreen() {
 }
 
 
+
+// ===================== AGENTS MANAGEMENT PAGE (ADMIN) =====================
+function renderAgents() {
+  // Local form state
+  if (!STATE._agentForm) STATE._agentForm = {name:'', role:'agent', email:'', pwd:'', error:'', saving:false};
+  const form = STATE._agentForm;
+
+  async function addAgent() {
+    if (!form.name.trim()) { form.error = 'Le nom est obligatoire.'; render(); return; }
+    if (!form.pwd.trim() || form.pwd.length < 3) { form.error = 'Mot de passe requis (3 caractères min).'; render(); return; }
+
+    // Generate ID from name
+    const id = form.name.trim().toLowerCase()
+      .normalize('NFD').replace(/[\u0300-\u036f]/g,'')  // remove accents
+      .replace(/[^a-z0-9]+/g,'_').replace(/^_|_$/g,'');
+
+    if (STATE.agents.find(a => a.id === id)) {
+      form.error = "Un agent avec un identifiant similaire existe déjà. Essayez un prénom différent.";
+      render(); return;
+    }
+
+    form.saving = true; form.error = ''; render();
+    try {
+      const hash = await hashPassword(form.pwd);
+      await sbUpsert('agents', [{
+        id, display_name: form.name.trim(),
+        role: form.role, email: form.email.trim() || null,
+        pwd_hash: hash, no_night: false
+      }], 'id');
+      // Refresh agents list
+      const agents = await sbGet('agents', 'order=display_name');
+      STATE.agents = agents;
+      form.name = ''; form.role = 'agent'; form.email = ''; form.pwd = '';
+      form.saving = false;
+      showToast('Agent ajouté : ' + id);
+      render();
+    } catch(e) {
+      form.error = 'Erreur : ' + e.message;
+      form.saving = false;
+      render();
+    }
+  }
+
+  async function removeAgent(agentId) {
+    if (!confirm(`Supprimer ${displayName(agentId)} ? Ses disponibilités et shifts resteront en base mais il ne pourra plus se connecter.`)) return;
+    try {
+      await sbDelete('agents', `id=eq.${agentId}`);
+      STATE.agents = STATE.agents.filter(a => a.id !== agentId);
+      showToast('Agent supprimé.');
+      render();
+    } catch(e) {
+      showToast('Erreur : ' + e.message, 'error');
+    }
+  }
+
+  async function toggleRole(ag) {
+    const newRole = ag.role === 'admin' ? 'agent' : 'admin';
+    try {
+      await sbPatch('agents', `id=eq.${ag.id}`, {role: newRole});
+      ag.role = newRole;
+      showToast(`${ag.display_name} → ${newRole}`);
+      render();
+    } catch(e) {
+      showToast('Erreur : ' + e.message, 'error');
+    }
+  }
+
+  const agents = [...STATE.agents].sort((a,b) => a.display_name.localeCompare(b.display_name));
+
+  return el('div', {},
+    el('div', {class:'page-header'},
+      el('div', {},
+        el('div', {class:'page-title'}, '👥 Gestion des agents'),
+        el('div', {class:'page-subtitle'}, agents.length + ' compte(s) au total')
+      )
+    ),
+
+    // ── Existing agents list ──────────────────────────────────────────────
+    el('div', {class:'card', style:{marginBottom:'16px'}},
+      el('div', {class:'section-title'}, 'Agents actifs'),
+      el('table', {style:{width:'100%',borderCollapse:'collapse',fontSize:'13px'}},
+        el('thead', {},
+          el('tr', {style:{borderBottom:'2px solid var(--border)'}},
+            el('th', {style:{padding:'8px 10px',textAlign:'left',color:'var(--text3)',fontSize:'11px',textTransform:'uppercase',letterSpacing:'0.5px'}}, 'Nom'),
+            el('th', {style:{padding:'8px 10px',textAlign:'left',color:'var(--text3)',fontSize:'11px',textTransform:'uppercase',letterSpacing:'0.5px'}}, 'Identifiant'),
+            el('th', {style:{padding:'8px 10px',textAlign:'left',color:'var(--text3)',fontSize:'11px',textTransform:'uppercase',letterSpacing:'0.5px'}}, 'Rôle'),
+            el('th', {style:{padding:'8px 10px',textAlign:'left',color:'var(--text3)',fontSize:'11px',textTransform:'uppercase',letterSpacing:'0.5px'}}, 'Email'),
+            el('th', {style:{padding:'8px 10px',textAlign:'left',color:'var(--text3)',fontSize:'11px',textTransform:'uppercase',letterSpacing:'0.5px'}}, 'Nuits'),
+            el('th', {style:{padding:'8px 10px'}},'')
+          )
+        ),
+        el('tbody', {},
+          ...agents.map(ag => {
+            const isMe = ag.id === STATE.user;
+            const nightCount = STATE.nightCounts[ag.id] || 0;
+            return el('tr', {style:{borderBottom:'1px solid var(--border)',background:isMe?'var(--accent-light)':'transparent'}},
+              el('td', {style:{padding:'10px 10px',fontWeight:'500'}},
+                ag.display_name, isMe ? el('span',{style:{fontSize:'10px',color:'var(--accent)',marginLeft:'6px'}},'(vous)') : null
+              ),
+              el('td', {style:{padding:'10px 10px',color:'var(--text3)',fontFamily:'monospace',fontSize:'12px'}}, ag.id),
+              el('td', {style:{padding:'10px 10px'}},
+                el('span', {
+                  style:{
+                    fontSize:'11px', padding:'2px 8px', borderRadius:'99px', cursor: isMe?'default':'pointer',
+                    background: ag.role==='admin'?'var(--accent-light)':'var(--green-bg)',
+                    color: ag.role==='admin'?'var(--accent)':'var(--green)',
+                    border: `1px solid ${ag.role==='admin'?'var(--blue-border)':'var(--green-border)'}`,
+                    fontWeight:'500'
+                  },
+                  onClick: isMe ? null : () => toggleRole(ag),
+                  title: isMe ? '' : 'Cliquer pour changer le rôle'
+                }, ag.role === 'admin' ? '⚙️ Admin' : '👤 Agent')
+              ),
+              el('td', {style:{padding:'10px 10px',fontSize:'12px',color:'var(--text3)'}},
+                ag.email || el('span',{style:{color:'var(--text3)',fontStyle:'italic'}},'—')
+              ),
+              el('td', {style:{padding:'10px 10px',textAlign:'center'}},
+                ag.no_night
+                  ? el('span',{style:{fontSize:'11px',color:'var(--text3)'}}, '🚫 nuits')
+                  : nightCount > 0
+                    ? el('span',{style:{fontSize:'11px',background:'var(--purple-bg)',color:'var(--purple)',padding:'1px 7px',borderRadius:'99px',border:'1px solid #c4b5fd'}}, '🌙 '+nightCount)
+                    : el('span',{style:{fontSize:'11px',color:'var(--text3)'}}, '0')
+              ),
+              el('td', {style:{padding:'10px 10px',textAlign:'right'}},
+                !isMe ? el('button', {
+                  class:'btn btn-danger',
+                  style:{fontSize:'11px',padding:'3px 10px'},
+                  onClick: () => removeAgent(ag.id)
+                }, '🗑️ Retirer') : null
+              )
+            );
+          })
+        )
+      )
+    ),
+
+    // ── Add new agent form ────────────────────────────────────────────────
+    el('div', {class:'card'},
+      el('div', {class:'section-title'}, '➕ Ajouter un agent'),
+      el('div', {style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'12px',marginBottom:'12px'}},
+        el('div', {class:'field',style:{margin:'0'}},
+          el('label',{}, 'Nom complet *'),
+          el('input',{
+            type:'text', placeholder:'Ex: Sophie Martin', value: form.name,
+            onInput: e=>{form.name=e.target.value; form.error='';},
+            style:{width:'100%',padding:'8px 10px',border:'1px solid var(--border2)',borderRadius:'var(--radius)',fontSize:'13px',background:'var(--bg)',color:'var(--text)'}
+          })
+        ),
+        el('div', {class:'field',style:{margin:'0'}},
+          el('label',{}, 'Rôle'),
+          el('select',{
+            onChange: e=>form.role=e.target.value,
+            style:{width:'100%',padding:'8px 10px',border:'1px solid var(--border2)',borderRadius:'var(--radius)',fontSize:'13px',background:'var(--bg)',color:'var(--text)'}
+          },
+            el('option',{value:'agent',selected:form.role==='agent'?'true':null},'👤 Agent'),
+            el('option',{value:'admin',selected:form.role==='admin'?'true':null},'⚙️ Administrateur')
+          )
+        ),
+        el('div', {class:'field',style:{margin:'0'}},
+          el('label',{}, 'Email'),
+          el('input',{
+            type:'email', placeholder:'prenom@exemple.com', value: form.email,
+            onInput: e=>{form.email=e.target.value;},
+            style:{width:'100%',padding:'8px 10px',border:'1px solid var(--border2)',borderRadius:'var(--radius)',fontSize:'13px',background:'var(--bg)',color:'var(--text)'}
+          })
+        ),
+        el('div', {class:'field',style:{margin:'0'}},
+          el('label',{}, 'Mot de passe initial *'),
+          el('input',{
+            type:'text', placeholder:'Ex: sophie123', value: form.pwd,
+            onInput: e=>{form.pwd=e.target.value; form.error='';},
+            style:{width:'100%',padding:'8px 10px',border:'1px solid var(--border2)',borderRadius:'var(--radius)',fontSize:'13px',background:'var(--bg)',color:'var(--text)'}
+          })
+        )
+      ),
+      form.error ? el('div',{class:'alert alert-danger',style:{marginBottom:'10px'}},'⚠️ '+form.error) : null,
+      el('p',{style:{fontSize:'11px',color:'var(--text3)',marginBottom:'10px'}},
+        "L'identifiant est généré automatiquement depuis le nom. L'agent pourra changer son mot de passe après sa première connexion."),
+      el('button', {
+        class:'btn btn-primary',
+        style:{opacity:form.saving?'0.6':'1'},
+        onClick: form.saving ? null : addAgent
+      }, form.saving ? '⏳ Création...' : '➕ Ajouter cet agent')
+    )
+  );
+}
+
 // ===================== AVAILABILITY INPUT (AGENT) =====================
 function renderAvailabilityInput() {
   const year  = STATE.dispoMonth.getFullYear();
@@ -1638,82 +1828,130 @@ function showToast(msg, type='success') {
 // ===================== AUTO-GENERATE =====================
 function autoGenerate() {
   if (!STATE.availData) return;
-  const year = STATE.viewMonth.getFullYear();
+  const year  = STATE.viewMonth.getFullYear();
   const month = STATE.viewMonth.getMonth();
   const slots = getMonthSlots(year, month);
-  
-  // Group by date
-  const byDate = {};
-  slots.forEach(slot => {
-    if (!byDate[slot.date]) byDate[slot.date] = [];
-    byDate[slot.date].push(slot);
-  });
-
-  // Track agent shift count for balancing
-  const agentShiftCount = {};
-  STATE.availData.agents.forEach(a => { agentShiftCount[a] = 0; });
 
   // Clear existing assignments for this month
   slots.forEach(slot => {
-    delete STATE.assignments[`${slot.date}_${slot.shift_id}`];
+    const lookup = storageDate(slot.date, slot.shift_id);
+    delete STATE.assignments[`${lookup}_${slot.shift_id}`];
   });
 
-  // For each date, assign shifts respecting no-consecutive rule
-  const sortedDates = Object.keys(byDate).sort();
-  sortedDates.forEach(date => {
-    const daySlots = byDate[date].sort((a,b) => a.shift_id.localeCompare(b.shift_id));
-    
+  const agents = STATE.agents.filter(a => a.role !== 'admin').map(a => a.id);
+
+  // Night equity: proportional to how many nights each agent offered
+  const nightSlots = slots.filter(s => s.shift_id === 'S4');
+  const nightAvailCount = {};
+  agents.forEach(id => { nightAvailCount[id] = 0; });
+  nightSlots.forEach(slot => {
+    agents.forEach(id => {
+      const agObj = STATE.agents.find(x=>x.id===id);
+      if (agObj && agObj.no_night) return;
+      const info = STATE.availability[`${id}_${slot.date}_${slot.shift_id}`];
+      if (info && info.dispo !== 'unavailable') nightAvailCount[id]++;
+    });
+  });
+
+  const totalNights = nightSlots.length;
+  const totalOffered = Object.values(nightAvailCount).reduce((s,n)=>s+n,0);
+  const nightTarget = {};
+  agents.forEach(id => {
+    nightTarget[id] = totalOffered > 0
+      ? Math.round(totalNights * (nightAvailCount[id] / totalOffered))
+      : 0;
+  });
+  const nightAssigned = {};
+  agents.forEach(id => { nightAssigned[id] = 0; });
+  const shiftCount = {};
+  agents.forEach(id => { shiftCount[id] = 0; });
+
+  const PRIORITY = {preferred:0, maybe:1, ask:2, unavailable:99};
+  const SHIFT_ORDER_GEN = ['S4','S1','S2','S3'];
+
+  const byDate = {};
+  slots.forEach(s => {
+    if (!byDate[s.date]) byDate[s.date] = [];
+    byDate[s.date].push(s);
+  });
+
+  Object.keys(byDate).sort().forEach(date => {
+    const daySlots = byDate[date].sort((a,b) =>
+      SHIFT_ORDER_GEN.indexOf(a.shift_id) - SHIFT_ORDER_GEN.indexOf(b.shift_id)
+    );
     daySlots.forEach(slot => {
-      const key = `${date}_${slot.shift_id}`;
-      
-      // Get available agents sorted by: preferred > maybe > ask, then by shift count (balance)
-      const agentDispos = Object.entries(slot.agents)
-        .map(([name, info]) => ({name, dispo: info.dispo, doublon: info.doublon}))
-        .filter(a => a.dispo !== 'unavailable' && a.dispo !== 'unknown');
-      
-      const PRIORITY = {preferred:0, maybe:1, ask:2};
-      agentDispos.sort((a,b) => {
-        const pa = PRIORITY[a.dispo] ?? 3;
-        const pb = PRIORITY[b.dispo] ?? 3;
+      const isNight = slot.shift_id === 'S4';
+      const lookupDate = storageDate(date, slot.shift_id);
+      const key = `${lookupDate}_${slot.shift_id}`;
+
+      const candidates = agents
+        .map(id => {
+          const info = STATE.availability[`${id}_${slot.date}_${slot.shift_id}`]
+                    || STATE.availability[`${id}_${lookupDate}_${slot.shift_id}`]
+                    || {dispo:'unavailable', doublon:'unavailable'};
+          return {id, dispo: info.dispo, doublon: info.doublon};
+        })
+        .filter(a => {
+          if (a.dispo === 'unavailable') return false;
+          if (isNight) {
+            const agObj = STATE.agents.find(x=>x.id===a.id);
+            if (agObj && agObj.no_night) return false;
+          }
+          return true;
+        });
+
+      if (!candidates.length) return;
+
+      candidates.sort((a, b) => {
+        const pa = PRIORITY[a.dispo] ?? 99;
+        const pb = PRIORITY[b.dispo] ?? 99;
         if (pa !== pb) return pa - pb;
-        return (agentShiftCount[a.name]||0) - (agentShiftCount[b.name]||0);
+        if (isNight) {
+          const aBelowTarget = nightAssigned[a.id] < nightTarget[a.id];
+          const bBelowTarget = nightAssigned[b.id] < nightTarget[b.id];
+          if (aBelowTarget !== bBelowTarget) return aBelowTarget ? -1 : 1;
+          if (nightAssigned[a.id] !== nightAssigned[b.id])
+            return nightAssigned[a.id] - nightAssigned[b.id];
+        }
+        return (shiftCount[a.id]||0) - (shiftCount[b.id]||0);
       });
 
-      // Assign best candidate avoiding consecutive if possible
       let assigned = false;
-      // First pass: no consecutive
-      for (const ag of agentDispos) {
-        if (!hasConsecutive(ag.name, date, slot.shift_id)) {
-          setAssignment(date, slot.shift_id, ag.name);
-          agentShiftCount[ag.name] = (agentShiftCount[ag.name]||0) + 1;
+      for (const ag of candidates) {
+        if (!hasConsecutive(ag.id, date, slot.shift_id)) {
+          setAssignment(lookupDate, slot.shift_id, ag.id);
+          shiftCount[ag.id]++;
+          if (isNight) nightAssigned[ag.id]++;
           assigned = true;
           break;
         }
       }
-      // Second pass: allow consecutive if no choice
-      if (!assigned && agentDispos.length > 0) {
-        const ag = agentDispos[0];
-        setAssignment(date, slot.shift_id, ag.name);
-        agentShiftCount[ag.name] = (agentShiftCount[ag.name]||0) + 1;
+      if (!assigned) {
+        setAssignment(lookupDate, slot.shift_id, candidates[0].id);
+        shiftCount[candidates[0].id]++;
+        if (isNight) nightAssigned[candidates[0].id]++;
       }
 
-      // Doublon (overlap shift) - assign if available
-      const doublonAgents = Object.entries(slot.agents)
-        .filter(([,info]) => info.doublon === 'preferred' || info.doublon === 'maybe')
-        .map(([name]) => name);
-      if (doublonAgents.length > 0) {
-        const dl = doublonAgents.find(n => {
-          const already = (STATE.assignments[key]||[]).some(a=>a.agent===n&&a.type==='main');
-          return !already;
+      // Doublon 19h-21h (S3 only)
+      if (slot.shift_id === 'S3') {
+        const dl = agents.find(id => {
+          const info = STATE.availability[`${id}_${slot.date}_S3`];
+          return info && (info.doublon==='preferred'||info.doublon==='maybe')
+            && !(STATE.assignments[key]||[]).some(a=>a.agent===id&&a.type==='main');
         });
-        if (dl) setAssignment(date, slot.shift_id, dl, 'doublon');
+        if (dl) setAssignment(lookupDate, slot.shift_id, dl, 'doublon');
       }
     });
   });
 
+  const nightSummary = agents
+    .filter(id => nightAssigned[id] > 0)
+    .map(id => `${displayName(id).split(' ')[0]}: ${nightAssigned[id]}`)
+    .join(', ');
+
   updateNightCounts();
   STATE.pendingStatus = 'draft';
-  showToast(t('generateSuccess'), 'success');
+  showToast(`Planning généré ✓ — Nuits : ${nightSummary||'aucune'}`, 'success');
   render();
 }
 
@@ -1839,6 +2077,121 @@ function renderModal() {
     );
   }
 
+
+  if (m.type === 'confirm-send') {
+    const year  = STATE.viewMonth.getFullYear();
+    const month = STATE.viewMonth.getMonth();
+    const MONTH_KEYS = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
+    const monthLabel = t(MONTH_KEYS[month]) + ' ' + year;
+    const SHIFT_LABELS = {S4:'00h–06h ★', S1:'06h–12h', S2:'12h–18h', S3:'18h–00h'};
+
+    const agentSummaries = STATE.agents
+      .filter(a => a.role !== 'admin')
+      .map(ag => {
+        const shifts = Object.entries(STATE.assignments)
+          .flatMap(([key, assigns]) => {
+            const mine = assigns.filter(a => a.agent === ag.id && a.type === 'main');
+            if (!mine.length) return [];
+            const parts = key.split('_');
+            const shiftId = parts[parts.length-1];
+            const storedDate = parts.slice(0,-1).join('_');
+            const [sy,sm] = storedDate.split('-').map(Number);
+            if (sy !== year || sm !== month+1) return [];
+            const displayDate = shiftId === 'S4'
+              ? toISO(addDays(new Date(storedDate+'T12:00:00'), 1))
+              : storedDate;
+            return [{displayDate, shiftId}];
+          })
+          .sort((a,b) => a.displayDate.localeCompare(b.displayDate));
+        return {ag, shifts};
+      });
+
+    if (!STATE.modal.selected) {
+      STATE.modal.selected = new Set(
+        agentSummaries
+          .filter(({ag,shifts}) => shifts.length > 0 && AGENT_EMAILS[ag.id]?.email)
+          .map(({ag}) => ag.id)
+      );
+    }
+    const selected = STATE.modal.selected;
+
+    return el('div', {class:'modal-overlay'},
+      el('div', {class:'modal', style:{width:'580px',maxHeight:'82vh',overflowY:'auto'}},
+        el('div', {class:'modal-title'}, '✉️ Envoyer le planning ' + monthLabel),
+        el('div', {class:'alert alert-info', style:{marginBottom:'12px'}},
+          "Cochez/décochez les agents à inclure. Chaque agent ne voit que ses propres shifts."
+        ),
+        el('div', {style:{display:'flex',gap:'8px',marginBottom:'12px',alignItems:'center'}},
+          el('button', {class:'btn btn-secondary', style:{fontSize:'11px',padding:'4px 10px'},
+            onClick:()=>{ agentSummaries.forEach(({ag,shifts})=>{ if(shifts.length>0&&AGENT_EMAILS[ag.id]?.email) selected.add(ag.id); }); render(); }
+          }, 'Tout sélectionner'),
+          el('button', {class:'btn btn-secondary', style:{fontSize:'11px',padding:'4px 10px'},
+            onClick:()=>{ selected.clear(); render(); }
+          }, 'Tout désélectionner'),
+          el('span', {style:{fontSize:'12px',color:'var(--text3)'}}, selected.size + ' agent(s) sélectionné(s)')
+        ),
+        ...agentSummaries.map(({ag, shifts}) => {
+          const nights   = shifts.filter(s=>s.shiftId==='S4').length;
+          const hasEmail = !!AGENT_EMAILS[ag.id]?.email;
+          const isSel    = selected.has(ag.id);
+          return el('div', {style:{
+            marginBottom:'8px', padding:'10px 12px',
+            border:'1px solid ' + (isSel ? 'var(--green-border)' : 'var(--border)'),
+            borderRadius:'var(--radius)',
+            background: isSel ? '#f0fdf4' : shifts.length===0 ? '#fafafa' : 'var(--surface)',
+            opacity: hasEmail ? '1' : '0.55'
+          }},
+            el('div', {style:{display:'flex',alignItems:'center',gap:'10px'}},
+              el('input', {
+                type:'checkbox',
+                checked: isSel ? 'true' : null,
+                disabled: !hasEmail ? 'true' : null,
+                style:{width:'16px',height:'16px',cursor:hasEmail?'pointer':'not-allowed',flexShrink:'0'},
+                onChange: e => { if(e.target.checked) selected.add(ag.id); else selected.delete(ag.id); render(); }
+              }),
+              el('div', {style:{flex:'1'}},
+                el('div', {style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'4px'}},
+                  el('span', {style:{fontWeight:'600',fontSize:'13px'}}, ag.display_name),
+                  el('div', {style:{display:'flex',gap:'5px',alignItems:'center'}},
+                    el('span', {style:{fontSize:'11px',background:'var(--blue-bg)',color:'var(--accent)',padding:'1px 7px',borderRadius:'99px',border:'1px solid var(--blue-border)'}}, shifts.length + ' shift(s)'),
+                    nights > 0 ? el('span', {style:{fontSize:'11px',background:'var(--purple-bg)',color:'var(--purple)',padding:'1px 7px',borderRadius:'99px',border:'1px solid #c4b5fd'}}, '🌙 ' + nights) : null,
+                    el('span', {style:{fontSize:'10px',color:hasEmail?'var(--text3)':'var(--red)'}}, hasEmail ? AGENT_EMAILS[ag.id].email : '⚠️ pas d\'email')
+                  )
+                ),
+                shifts.length > 0
+                  ? el('div', {style:{display:'flex',flexWrap:'wrap',gap:'3px'}},
+                      ...shifts.map(s => {
+                        const d  = new Date(s.displayDate+'T12:00:00');
+                        const sc = {S4:'#ede9fe',S1:'#dbeafe',S2:'#fce7f3',S3:'#d1fae5'}[s.shiftId]||'#f0f0f0';
+                        const tc = {S4:'#6d28d9',S1:'#1d4ed8',S2:'#be185d',S3:'#065f46'}[s.shiftId]||'#333';
+                        return el('span',{style:{fontSize:'10px',padding:'2px 6px',borderRadius:'4px',background:sc,color:tc,fontWeight:'500'}},
+                          d.getDate()+' '+SHIFT_LABELS[s.shiftId]);
+                      })
+                    )
+                  : el('span', {style:{fontSize:'11px',color:'var(--text3)',fontStyle:'italic'}}, 'Aucun shift ce mois-ci')
+              )
+            )
+          );
+        }),
+        el('div', {class:'modal-footer'},
+          el('button', {class:'btn btn-secondary', onClick:()=>{STATE.modal=null;render();}}, t('cancel')),
+          el('button', {
+            class: selected.size > 0 ? 'btn btn-success' : 'btn btn-secondary',
+            style: {opacity: selected.size > 0 ? '1' : '0.5'},
+            onClick: selected.size > 0 ? async () => {
+              const toSend = [...selected];
+              STATE.modal = null;
+              STATE.pendingStatus = 'validated';
+              await sendPlanningToAgents(toSend).catch(e=>showToast('Erreur email: '+e.message,'error'));
+              showToast('✉️ Planning envoyé à ' + toSend.length + ' agent(s)');
+              render();
+            } : null
+          }, '✉️ Envoyer à ' + selected.size + ' agent(s)')
+        )
+      )
+    );
+  }
+
   if (m.type === 'confirm-remove') {
     return el('div', {class:'modal-overlay'},
       el('div', {class:'modal'},
@@ -1884,10 +2237,11 @@ function renderSidebar() {
     ),
     el('nav', {class:'sidebar-nav'},
       isAdmin ? el('div', {class:'nav-section'}, t('admin')) : null,
-      isAdmin ? navBtn('planning', '📅', t('planning')) : null,
-      isAdmin ? navBtn('requests', '🔔', t('requests') + (STATE.requests.filter(r=>r.status==='pending').length > 0 ? ` (${STATE.requests.filter(r=>r.status==='pending').length})` : '')) : null,
-      isAdmin ? navBtn('nightcount', '🌙', t('nightCount')) : null,
-      isAdmin ? navBtn('import', '📥', t('import')) : null,
+      isAdmin ? navBtn('planning',  '📅', t('planning')) : null,
+      isAdmin ? navBtn('requests',  '🔔', t('requests') + (STATE.requests.filter(r=>r.status==='pending').length > 0 ? ` (${STATE.requests.filter(r=>r.status==='pending').length})` : '')) : null,
+      isAdmin ? navBtn('agents',    '👥', 'Gestion agents') : null,
+      isAdmin ? navBtn('nightcount','🌙', t('nightCount')) : null,
+      isAdmin ? navBtn('import',    '📥', t('import')) : null,
       
       !isAdmin ? el('div', {class:'nav-section'}, t('agent')) : null,
       !isAdmin ? navBtn('myshifts',  '📋', t('myShifts')) : null,
@@ -2855,6 +3209,7 @@ function render() {
       STATE.page === 'dispo'      ? renderAvailabilityInput() :
       STATE.page === 'nightcount' ? renderNightCount() :
       STATE.page === 'requests'   ? renderRequests() :
+      STATE.page === 'agents'     ? renderAgents() :
       STATE.page === 'import'     ? renderImport() :
       STATE.page === 'changepwd'  ? renderChangePassword() :
       el('div', {}, 'Page inconnue')
