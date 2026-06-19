@@ -949,6 +949,16 @@ async function loadAllData() {
     }
     STATE.agents = agents;
 
+    // Sync emails from AGENT_EMAILS into Supabase for agents missing email
+    const toSync = agents.filter(a => !a.email && AGENT_EMAILS[a.id]?.email);
+    if (toSync.length > 0) {
+      await Promise.all(toSync.map(ag =>
+        sbPatch('agents', `id=eq.${ag.id}`, {email: AGENT_EMAILS[ag.id].email}).catch(()=>{})
+      ));
+      const refreshed = await sbGet('agents', 'order=display_name');
+      STATE.agents = refreshed;
+    }
+
     // 2. Availability (all entries — no date filter, load everything)
     const avail = await sbGet('availability', 'order=date,shift_id&limit=50000');
     STATE.availability = {};
@@ -1361,8 +1371,12 @@ function renderAgents() {
                   title: isMe ? '' : 'Cliquer pour changer le rôle'
                 }, ag.role === 'admin' ? '⚙️ Admin' : '👤 Agent')
               ),
-              el('td', {style:{padding:'10px 10px',fontSize:'12px',color:'var(--text3)'}},
-                ag.email || el('span',{style:{color:'var(--text3)',fontStyle:'italic'}},'—')
+              el('td', {style:{padding:'10px 10px',fontSize:'12px',color:'var(--text2)'}},
+                ag.email
+                  ? ag.email
+                  : AGENT_EMAILS[ag.id]?.email
+                    ? AGENT_EMAILS[ag.id].email
+                    : el('span',{style:{color:'var(--red)',fontStyle:'italic'}}, '⚠️ pas email')
               ),
               el('td', {style:{padding:'10px 10px',textAlign:'center'}},
                 ag.no_night
