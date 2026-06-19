@@ -962,7 +962,10 @@ function sbHeaders() {
 }
 
 async function sbGet(table, params='') {
-  const r = await fetch(`${STATE.supabaseUrl}/rest/v1/${table}?${params}`, {headers: sbHeaders()});
+  const r = await fetch(`${STATE.supabaseUrl}/rest/v1/${table}?${params}`, {
+    headers: {...sbHeaders(), 'Cache-Control': 'no-cache'},
+    cache: 'no-store'
+  });
   if (!r.ok) throw new Error(`GET ${table}: ${r.status} ${await r.text()}`);
   return r.json();
 }
@@ -1036,7 +1039,7 @@ async function loadAllData() {
     }
 
     // 2. Availability (all entries — no date filter, load everything)
-    const avail = await sbGet('availability', 'order=date,shift_id&limit=50000');
+    const avail = await sbGet('availability', `order=id.asc&limit=50000&_ts=${Date.now()}`);
     STATE.availability = {};
     avail.forEach(row => {
       STATE.availability[`${row.agent_id}_${row.date}_${row.shift_id}`] = {
@@ -1072,7 +1075,7 @@ async function loadAllData() {
 
     // Auto-refresh every 30s
     if (!STATE._refreshTimer) {
-      STATE._refreshTimer = setInterval(silentRefresh, 30000); // 30 sec
+      STATE._refreshTimer = STATE._refreshTimer = setInterval(silentRefresh, 120000); // 2 minutes instead of 30s // 30 sec
     }
   } catch(e) {
     STATE.loading = false;
@@ -1098,22 +1101,24 @@ async function silentRefresh() {
       date: r.date, shiftId: r.shift_id,
       reason: r.reason, status: r.status
     }));
-    const avail = await sbGet('availability', 'order=date,shift_id&limit=50000');
+    const avail = await sbGet('availability', `order=id.asc&limit=50000&_ts=${Date.now()}`);
     // Only overwrite availability if agent has no pending unsaved edits
     // Otherwise the refresh would erase their in-progress work
-    // Never overwrite availability during or right after a save
-    const hasPendingEdits = Object.keys(STATE.dispoEdits || {}).length > 0;
-    const justSaved = STATE.lastSaveTime && (Date.now() - STATE.lastSaveTime < 60000);
-    if (!hasPendingEdits && !justSaved) {
-      STATE.availability = {};
-      avail.forEach(row => {
-        STATE.availability[`${row.agent_id}_${row.date}_${row.shift_id}`] = {
-          dispo: row.dispo, doublon: row.doublon
-        };
+    // Merge availability: always load from Supabase but preserve recent local edits
+    const savedKeys = new Set(Object.keys(STATE.savedLocally || {}));
+    STATE.availability = {};
+    avail.forEach(row => {
+      const k = `${row.agent_id}_${row.date}_${row.shift_id}`;
+      STATE.availability[k] = {dispo: row.dispo, doublon: row.doublon};
+    });
+    // Re-apply any locally saved values that Supabase may not have persisted
+    if (STATE.savedLocally) {
+      Object.entries(STATE.savedLocally).forEach(([k, v]) => {
+        STATE.availability[k] = v;
       });
-      rebuildAvailData();
-      updateNightCounts();
     }
+    rebuildAvailData();
+    updateNightCounts();
     // Show notification if new pending requests appeared
     const newPending = STATE.requests.filter(r=>r.status==='pending').length;
     if (newPending > 0) {
@@ -1856,8 +1861,28 @@ async function saveAll() {
       showToast('Erreur Supabase: ' + firstErr, 'error');
     } else {
       await trackDispoUpdate(STATE.user, saved).catch(()=>{});
+      // Store saved values locally so silentRefresh can't overwrite them
+      if (!STATE.savedLocally) STATE.savedLocally = {};
+      Object.keys(STATE.dispoEdits).forEach(editKey => {
+        const lu = editKey.lastIndexOf('_');
+        const d = editKey.substring(0, lu);
+        const sid = editKey.substring(lu + 1);
+        const k = `${STATE.user}_${d}_${sid}`;
+        STATE.savedLocally[k] = {
+          dispo: STATE.dispoEdits[editKey].dispo || 'unavailable',
+          doublon: STATE.dispoEdits[editKey].doublon || 'unavailable'
+        };
+      });
       STATE.dispoEdits = {};
       STATE.lastSaveTime = Date.now();
+      // Reset the refresh timer so it doesn't fire immediately after save
+      if (STATE._refreshTimer) {
+        clearInterval(STATE._refreshTimer);
+        STATE._refreshTimer = setTimeout(() => {
+          STATE._refreshTimer = setInterval(silentRefresh, 120000);
+          silentRefresh();
+        }, 5000); // Wait 5 seconds before next refresh
+      }
       showToast(`✓ ${saved} disponibilité(s) enregistrée(s)`);
     }
     render();
