@@ -1807,42 +1807,22 @@ function cycleDoublon(date) {
 
 async function saveAll() {
   const editKeys = Object.keys(STATE.dispoEdits);
-  console.log('[saveAll] called with', editKeys.length, 'edits:', editKeys);
-  if (!editKeys.length) { showToast('Rien à sauvegarder','info'); return; }
+  if (!editKeys.length) { showToast('Rien à sauvegarder', 'info'); return; }
   STATE.syncing = true; render();
-  showToast(`⏳ Sauvegarde de ${editKeys.length} ligne(s)...`, 'info');
-  try {
-    let saved = 0;
-    let firstErr = null;
-    for (const [key, val] of Object.entries(STATE.dispoEdits)) {
-      const lastUnderscore = key.lastIndexOf('_');
-      const date    = key.substring(0, lastUnderscore);
-      const shiftId = key.substring(lastUnderscore + 1);
-      const row = [{
-        agent_id: STATE.user,
-        date:     date,
-        shift_id: shiftId,
-        dispo:    val.dispo    || 'unavailable',
-        doublon:  val.doublon  || 'unavailable'
-      }];
-      // Use direct fetch with full error details
-      // Try PATCH first (update existing row)
-      const filterUrl = `${STATE.supabaseUrl}/rest/v1/availability?agent_id=eq.${STATE.user}&date=eq.${date}&shift_id=eq.${shiftId}`;
-      const patchR = await fetch(filterUrl, {
-        method: 'PATCH',
-        headers: {
-          'apikey': STATE.supabaseKey,
-          'Authorization': 'Bearer ' + STATE.supabaseKey,
-          'Content-Type': 'application/json',
-          'Prefer': 'return=minimal'
-        },
-        body: JSON.stringify({dispo: row[0].dispo, doublon: row[0].doublon})
-      });
-      // If no row existed (0 rows updated), do INSERT
-      const count = parseInt(patchR.headers.get('content-range')?.split('/')[1] || '1');
-      let r = patchR;
-      if (patchR.ok && count === 0) {
-        r = await fetch(`${STATE.supabaseUrl}/rest/v1/availability`, {
+  let saved = 0;
+  let errors = 0;
+  for (const [key, val] of Object.entries(STATE.dispoEdits)) {
+    const lu = key.lastIndexOf('_');
+    const date = key.substring(0, lu);
+    const shiftId = key.substring(lu + 1);
+    try {
+      await fetch(
+        `${STATE.supabaseUrl}/rest/v1/availability?agent_id=eq.${STATE.user}&date=eq.${date}&shift_id=eq.${shiftId}`,
+        { method: 'DELETE', headers: {'apikey': STATE.supabaseKey, 'Authorization': 'Bearer ' + STATE.supabaseKey} }
+      );
+      const ins = await fetch(
+        `${STATE.supabaseUrl}/rest/v1/availability`,
+        {
           method: 'POST',
           headers: {
             'apikey': STATE.supabaseKey,
@@ -1850,63 +1830,37 @@ async function saveAll() {
             'Content-Type': 'application/json',
             'Prefer': 'return=minimal'
           },
-          body: JSON.stringify(row[0])
-        });
+          body: JSON.stringify({
+            agent_id: STATE.user, date: date, shift_id: shiftId,
+            dispo: val.dispo || 'unavailable', doublon: val.doublon || 'unavailable'
+          })
+        }
+      );
+      if (ins.ok) {
+        const k = `${STATE.user}_${date}_${shiftId}`;
+        STATE.availability[k] = {dispo: val.dispo || 'unavailable', doublon: val.doublon || 'unavailable'};
+        if (!STATE.savedLocally) STATE.savedLocally = {};
+        STATE.savedLocally[k] = STATE.availability[k];
+        saved++;
+      } else {
+        errors++;
+        console.error('INSERT failed:', ins.status, await ins.text());
       }
-      const responseText = await r.text();
-      console.log('[saveAll] response:', r.status, r.statusText, responseText.substring(0, 200));
-      if (!r.ok) {
-        firstErr = `HTTP ${r.status}: ${responseText}`;
-        console.error('Save error for', key, firstErr);
-        break;
-      }
-      // Verify the save actually worked by checking response
-      // Supabase returns 201 for insert, 200 for update with merge-duplicates
-      if (r.status !== 200 && r.status !== 201 && r.status !== 204) {
-        firstErr = `Statut inattendu ${r.status}: ${responseText}`;
-        console.error('Unexpected status for', key, firstErr);
-        break;
-      }
-      STATE.availability[`${STATE.user}_${date}_${shiftId}`] = {dispo: row[0].dispo, doublon: row[0].doublon};
-      saved++;
+    } catch(e) {
+      errors++;
+      console.error('Save error:', e);
     }
-    STATE.syncing = false;
-    if (firstErr) {
-      showToast('Erreur Supabase: ' + firstErr, 'error');
-    } else {
-      await trackDispoUpdate(STATE.user, saved).catch(()=>{});
-      // Store saved values locally so silentRefresh can't overwrite them
-      if (!STATE.savedLocally) STATE.savedLocally = {};
-      Object.keys(STATE.dispoEdits).forEach(editKey => {
-        const lu = editKey.lastIndexOf('_');
-        const d = editKey.substring(0, lu);
-        const sid = editKey.substring(lu + 1);
-        const k = `${STATE.user}_${d}_${sid}`;
-        STATE.savedLocally[k] = {
-          dispo: STATE.dispoEdits[editKey].dispo || 'unavailable',
-          doublon: STATE.dispoEdits[editKey].doublon || 'unavailable'
-        };
-      });
-      STATE.dispoEdits = {};
-      STATE.lastSaveTime = Date.now();
-      // Reset the refresh timer so it doesn't fire immediately after save
-      if (STATE._refreshTimer) {
-        clearInterval(STATE._refreshTimer);
-        STATE._refreshTimer = setTimeout(() => {
-          STATE._refreshTimer = setInterval(silentRefresh, 120000);
-          silentRefresh();
-        }, 5000); // Wait 5 seconds before next refresh
-      }
-      showToast(`✓ ${saved} disponibilité(s) enregistrée(s)`);
-    }
-    render();
-  } catch(e) {
-    STATE.syncing = false;
-    showToast('Erreur réseau: ' + e.message, 'error');
-    console.error('saveAll network error:', e);
-    render();
   }
+  STATE.dispoEdits = {};
+  STATE.syncing = false;
+  if (errors > 0) {
+    showToast('Erreur: ' + errors + ' ligne(s) non sauvegardée(s)', 'error');
+  } else {
+    showToast('✓ ' + saved + ' disponibilité(s) enregistrée(s)');
+  }
+  render();
 }
+
 
 function renderAvailabilityInput() {
   const year  = STATE.dispoMonth.getFullYear();
