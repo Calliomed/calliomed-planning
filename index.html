@@ -2579,7 +2579,36 @@ function renderPlanning() {
                     fontWeight:'500',border:'1px solid #c4b5fd',marginTop:'1px'
                   }}, shortName(a.agent)+'↻')
                 )
-              : null
+              : null,
+            // Pending claim requests — shown in pink/magenta
+            (() => {
+              const pendingClaims = STATE.requests.filter(r =>
+                r.type === 'claim' && r.status === 'pending' &&
+                r.date === lookupDate && r.shiftId === shiftId
+              );
+              if (!pendingClaims.length) return null;
+              return pendingClaims.map(r => {
+                const alreadyAssigned = mainAssigns.some(a => a.agent === r.agent);
+                const isDoublon = doublonAssigns.some(a => a.agent === r.agent);
+                const isConflict = alreadyAssigned || isDoublon;
+                return el('div',{
+                  style:{
+                    background: isConflict ? '#fff0f6' : '#fdf2f8',
+                    color: '#c2185b',
+                    borderRadius:'4px', padding:'2px 5px',
+                    fontSize:'10px', fontWeight:'600',
+                    border:'1px solid #f48fb1',
+                    marginTop:'2px',
+                    display:'flex', alignItems:'center', gap:'2px',
+                    boxShadow: isConflict ? '0 0 0 1.5px #e91e63' : 'none'
+                  },
+                  title: displayName(r.agent) + ' — demande en attente' + (isConflict ? ' ⚠ DOUBLON' : '')
+                },
+                  '📩 ' + shortName(r.agent),
+                  isConflict ? el('span',{style:{fontSize:'9px',color:'#e91e63'}},' ⚠') : null
+                );
+              });
+            })()
           );
         })
       );
@@ -2636,7 +2665,9 @@ function renderPlanning() {
       el('div',{class:'legend-item'},el('div',{class:'legend-dot',style:{background:'var(--green-bg)',border:'1px solid var(--green-border)'}}),t('preferred')),
       el('div',{class:'legend-item'},el('div',{class:'legend-dot',style:{background:'var(--yellow-bg)',border:'1px solid var(--yellow-border)'}}),t('maybe')),
       el('div',{class:'legend-item'},el('div',{class:'legend-dot',style:{background:'var(--red-bg)',border:'1px solid var(--red-border)'}}),t('unfilledWarning')),
-      el('div',{class:'legend-item'},el('div',{class:'legend-dot',style:{background:'var(--purple-bg)',border:'1px solid #c4b5fd'}}),t('overlapShift'))
+      el('div',{class:'legend-item'},el('div',{class:'legend-dot',style:{background:'var(--purple-bg)',border:'1px solid #c4b5fd'}}),t('overlapShift')),
+      el('div',{class:'legend-item'},el('div',{class:'legend-dot',style:{background:'#fdf2f8',border:'1px solid #f48fb1'}}), '📩 Demande en attente'),
+      el('div',{class:'legend-item'},el('div',{class:'legend-dot',style:{background:'#fff0f6',border:'2px solid #e91e63'}}), '⚠ Doublon')
     ),
 
     el('div',{class:'card',style:{padding:'0 0 8px 0'}},
