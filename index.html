@@ -1039,7 +1039,7 @@ async function loadAllData() {
     }
 
     // 2. Availability (all entries — no date filter, load everything)
-    const avail = await sbGet('availability', `order=id.asc&limit=50000&_ts=${Date.now()}`);
+    const avail = await sbGet('availability', 'order=id.asc&limit=50000');
     STATE.availability = {};
     avail.forEach(row => {
       STATE.availability[`${row.agent_id}_${row.date}_${row.shift_id}`] = {
@@ -1101,7 +1101,7 @@ async function silentRefresh() {
       date: r.date, shiftId: r.shift_id,
       reason: r.reason, status: r.status
     }));
-    const avail = await sbGet('availability', `order=id.asc&limit=50000&_ts=${Date.now()}`);
+    const avail = await sbGet('availability', 'order=id.asc&limit=50000');
     // Only overwrite availability if agent has no pending unsaved edits
     // Otherwise the refresh would erase their in-progress work
     // Merge availability: always load from Supabase but preserve recent local edits
