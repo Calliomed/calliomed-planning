@@ -4,7 +4,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
 <title>Calliomed — Planning v5.2</title>
 <style>
 :root {
@@ -223,7 +223,55 @@ body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; background
 /* RESPONSIVE */
 @media (max-width: 768px) {
   .sidebar { display: none; }
-  .main { margin-left: 0; padding: 12px; max-width: 100vw; }
+  .main { margin-left: 0; padding: 12px 10px 80px 10px; max-width: 100vw; }
+  .mobile-nav { display: flex !important; }
+  .page-header { flex-direction: column; align-items: flex-start; gap: 8px; }
+  .header-actions { flex-wrap: wrap; }
+  .stats-row { grid-template-columns: 1fr 1fr; }
+}
+@media (min-width: 769px) {
+  .mobile-nav { display: none !important; }
+}
+
+/* Mobile bottom nav */
+.mobile-nav {
+  display: none;
+  position: fixed;
+  bottom: 0; left: 0; right: 0;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  z-index: 200;
+  padding: 6px 0 env(safe-area-inset-bottom, 6px);
+  box-shadow: 0 -2px 8px rgba(0,0,0,0.08);
+}
+.mobile-nav-btn {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 4px;
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: var(--text3);
+  font-size: 10px;
+  font-weight: 500;
+  transition: color 0.15s;
+  -webkit-tap-highlight-color: transparent;
+}
+.mobile-nav-btn.active { color: var(--accent); }
+.mobile-nav-btn .nav-emoji { font-size: 20px; line-height: 1; }
+.mobile-nav-badge {
+  position: absolute;
+  top: 2px; right: 2px;
+  background: var(--red);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
 }
 
 .shift-row-actions { display: flex; gap: 6px; }
@@ -259,6 +307,17 @@ body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; background
 .grid-scroll { overflow-x: auto; }
 .month-btn { white-space: nowrap; min-width: 80px; font-size: 12px; }
 
+
+/* Touch improvements */
+@media (max-width: 768px) {
+  .agent-grid { grid-template-columns: 1fr !important; }
+  .modal { width: 95vw !important; max-height: 85vh; overflow-y: auto; }
+  .modal-overlay { padding: 10px; }
+  .shift-row { grid-template-columns: 90px 1fr auto !important; }
+  .month-nav .month-label { min-width: 160px !important; font-size: 14px; }
+  .stats-row .stat-value { font-size: 18px !important; }
+  table { font-size: 12px; }
+}
 select.lang-select { font-size: 12px; padding: 4px 8px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); color: var(--text2); cursor: pointer; }
 </style>
 </head>
@@ -3956,6 +4015,41 @@ function render() {
   if (STATE.page === 'loading') { root.appendChild(renderLoadingScreen()); return; }
   if (STATE.page === 'login')   { root.appendChild(renderLogin()); return; }
 
+  const isAdmin = STATE.role === 'admin';
+  const pendingCount = STATE.requests.filter(r=>r.status==='pending').length;
+
+  // Mobile bottom navigation
+  function renderMobileNav() {
+    const agentPages = [
+      {page:'myshifts',   emoji:'📋', label:'Mes shifts'},
+      {page:'available',  emoji:'🔓', label:'Disponibles'},
+      {page:'dispo',      emoji:'✏️',  label:'Mes dispos'},
+      {page:'nightcount', emoji:'🌙', label:'Nuits'},
+    ];
+    const adminPages = [
+      {page:'planning',   emoji:'📅', label:'Planning'},
+      {page:'requests',   emoji:'🔔', label:'Demandes', badge: pendingCount},
+      {page:'agents',     emoji:'👥', label:'Agents'},
+      {page:'emails',     emoji:'✉️',  label:'Emails'},
+      {page:'import',     emoji:'📥', label:'Import'},
+    ];
+    const pages = isAdmin ? adminPages : agentPages;
+
+    return el('nav', {class:'mobile-nav'},
+      ...pages.map(p =>
+        el('button', {
+          class:`mobile-nav-btn${STATE.page===p.page?' active':''}`,
+          style:{position:'relative'},
+          onClick:()=>{STATE.page=p.page;render();}
+        },
+          el('span',{class:'nav-emoji'}, p.emoji),
+          el('span',{}, p.label),
+          p.badge ? el('span',{class:'mobile-nav-badge'}, String(p.badge)) : null
+        )
+      )
+    );
+  }
+
   const app = el('div', {class:'app'},
     renderSidebar(),
     el('div', {class:'main'},
@@ -3972,6 +4066,9 @@ function render() {
       el('div', {}, 'Page inconnue')
     )
   );
+
+  // Add mobile nav
+  app.appendChild(renderMobileNav());
 
   const modal = renderModal();
   if (modal) app.appendChild(modal);
