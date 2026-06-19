@@ -1769,13 +1769,21 @@ function removeAssignment(date, shiftId, agent, type='main') {
 }
 
 function updateNightCounts() {
+  // Count S4 shifts per agent where display date falls in viewMonth
   STATE.nightCounts = {};
+  const year  = STATE.viewMonth.getFullYear();
+  const month = STATE.viewMonth.getMonth();
+  const monthStart = new Date(year, month, 1);
+  const monthEnd   = new Date(year, month + 1, 0);
   Object.entries(STATE.assignments).forEach(([key, agents]) => {
-    if (key.endsWith('_S4')) {
-      agents.forEach(a => {
-        STATE.nightCounts[a.agent] = (STATE.nightCounts[a.agent] || 0) + 1;
-      });
-    }
+    if (!key.endsWith('_S4')) return;
+    const stored = key.replace('_S4','');
+    const display = new Date(stored + 'T12:00:00');
+    display.setDate(display.getDate() + 1);
+    if (display < monthStart || display > monthEnd) return;
+    agents.filter(a=>a.type==='main').forEach(a => {
+      STATE.nightCounts[a.agent] = (STATE.nightCounts[a.agent] || 0) + 1;
+    });
   });
 }
 
@@ -2384,9 +2392,20 @@ function renderPlanning() {
   const totalSlots = slots.length;
   const coveredSlots = slots.filter(s => getAssignments(storageDate(s.date,s.shift_id),s.shift_id).length > 0).length;
   const uncoveredSlots = totalSlots - coveredSlots;
+  // S4 display date = stored date + 1 day
+  // For month M: display dates are 1st to last day of M
+  // So stored dates run from last day of M-1 to second-to-last day of M
+  const monthStart = new Date(year, month, 1);    // June 1
+  const monthEnd   = new Date(year, month + 1, 0); // June 30
   const nightSlots = Object.entries(STATE.assignments)
-    .filter(([k,v]) => { const [d] = k.split('_S4'); return k.includes('_S4') && d.startsWith(`${year}-${String(month+1).padStart(2,'0')}`); })
-    .reduce((n,[,v]) => n + v.length, 0);
+    .filter(([k]) => {
+      if (!k.endsWith('_S4')) return false;
+      const stored = k.replace('_S4','');
+      const display = new Date(stored + 'T12:00:00');
+      display.setDate(display.getDate() + 1); // display = stored + 1
+      return display >= monthStart && display <= monthEnd;
+    })
+    .reduce((n,[,v]) => n + v.filter(a=>a.type==='main').length, 0);
 
   const DAY_NAMES = ['dim','lun','mar','mer','jeu','ven','sam'];
   const MONTH_KEYS = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
