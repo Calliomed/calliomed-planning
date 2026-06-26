@@ -2856,7 +2856,7 @@ function renderModal() {
       el('div', {class:'modal'},
         el('div', {class:'modal-title'}, t('rejectShift')),
         el('p', {style:{fontSize:'13px',color:'var(--text2)',marginBottom:'12px'}}, 
-          `${formatDate(m.shiftId==='S4' ? toISO(addDays(new Date(m.date+'T12:00:00'),1)) : m.date)} — ${shiftLabel(m.shiftId)}`),
+          `${m.shiftId==='S4' ? 'Nuit '+formatDate(m.date)+' → '+formatDate(toISO(addDays(new Date(m.date+'T12:00:00'),1))) : formatDate(m.date)} — ${shiftLabel(m.shiftId)}`),
         el('div', {class:'field'},
           el('label', {}, t('rejectReason')),
           el('input', {type:'text', placeholder:'...', onInput: e => reason = e.target.value, style:{width:'100%',padding:'8px 10px',border:'1px solid var(--border2)',borderRadius:'var(--radius)',fontSize:'13px'}})
