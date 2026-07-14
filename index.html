@@ -637,7 +637,7 @@ const STATE = {
   modal: null,
   loading: false,
   syncing: false,
-  viewMonth: new Date(2026, 5, 1),
+  viewMonth: new Date(new Date().getFullYear(), new Date().getMonth(), 1),
   filterAgent: 'all',
   filterShift: 'all',
   selectedDay: null,
@@ -650,7 +650,7 @@ const STATE = {
   emailTemplates: null,  // loaded from Supabase settings
   dispoLastUpdate: {},   // agentId -> {date, count}
   // Dispo input
-  dispoMonth: new Date(2026, 5, 1),
+  dispoMonth: new Date(new Date().getFullYear(), new Date().getMonth(), 1),
   dispoEdits: {},    // key: "date_shiftId" => {dispo, doublon}
 };
 
@@ -755,6 +755,87 @@ async function sendBrevoEmail(to, subject, htmlContent) {
   }
   return res.json();
 }
+
+async function sendUnassignedShifts(days) {
+  const brevoKey = getBrevoKey();
+  if (!brevoKey) { showToast('Clé Brevo manquante — configurez-la dans Emails & Suivi', 'error'); return; }
+
+  // Get next week's dates (Mon → Sun)
+  const today = new Date();
+  const dayOfWeek = today.getDay(); // 0=sun, 1=mon...
+  const daysUntilNextMon = dayOfWeek === 0 ? 1 : 8 - dayOfWeek;
+  const nextMon = new Date(today);
+  nextMon.setDate(today.getDate() + daysUntilNextMon);
+  const nextSun = new Date(nextMon);
+  nextSun.setDate(nextMon.getDate() + 6);
+
+  const toISO_d = d => d.toISOString().split('T')[0];
+  const startStr = toISO_d(nextMon);
+  const endStr   = toISO_d(nextSun);
+
+  // Find unassigned slots in next week
+  const SHIFTS = ['S4','S1','S2','S3'];
+  const SHIFT_LABELS = {S4:'00h–06h ★ (NUIT)', S1:'06h–12h', S2:'12h–18h', S3:'18h–00h'};
+  const unassigned = [];
+
+  for (let d = new Date(nextMon); d <= nextSun; d.setDate(d.getDate()+1)) {
+    const ds = toISO_d(new Date(d));
+    for (const sh of SHIFTS) {
+      const assigned = (STATE.assignments[`${ds}_${sh}`] || []).filter(a => a.type === 'main');
+      if (!assigned.length) {
+        const dayName = new Date(ds+'T12:00:00').toLocaleDateString('fr-BE', {weekday:'long', day:'numeric', month:'long'});
+        unassigned.push({date: ds, shiftId: sh, label: `${dayName} — ${SHIFT_LABELS[sh]}`});
+      }
+    }
+  }
+
+  if (!unassigned.length) {
+    showToast('✓ Tous les créneaux de la semaine prochaine sont attribués !', 'info');
+    return;
+  }
+
+  // Build email content
+  const weekLabel = `${nextMon.toLocaleDateString('fr-BE',{day:'numeric',month:'long'})} au ${nextSun.toLocaleDateString('fr-BE',{day:'numeric',month:'long',year:'numeric'})}`;
+  const slotsHtml = unassigned.map(s =>
+    `<li style="padding:4px 0;border-bottom:1px solid #eee;">${s.label}</li>`
+  ).join('');
+
+  const htmlContent = `
+    <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
+      <h2 style="color:#4f46e5;">Calliomed Planning</h2>
+      <p>Bonjour,</p>
+      <p>Des créneaux ne sont pas encore attribués pour la semaine du <strong>${weekLabel}</strong> :</p>
+      <ul style="list-style:none;padding:0;margin:16px 0;">
+        ${slotsHtml}
+      </ul>
+      <p>Si vous êtes disponible, connectez-vous sur <a href="https://calliomed.github.io/calliomed-planning/">Calliomed Planning</a> et faites une demande via "Shifts disponibles".</p>
+      <p style="color:#888;font-size:12px;margin-top:24px;">Calliomed Planning — message automatique</p>
+    </div>`;
+
+  // Send to all agents
+  const agents = STATE.agents.filter(a => a.role !== 'admin' && a.email);
+  if (!agents.length) { showToast('Aucun agent avec email trouvé', 'error'); return; }
+
+  showToast(`⏳ Envoi à ${agents.length} agent(s)...`, 'info');
+  let sent = 0, errors = 0;
+  for (const ag of agents) {
+    try {
+      await sendBrevoEmail({email: ag.email, name: ag.display_name},
+        `📅 Créneaux libres — semaine du ${weekLabel}`,
+        htmlContent);
+      sent++;
+    } catch(e) {
+      console.error('Email error for', ag.id, e.message);
+      errors++;
+    }
+  }
+  if (errors > 0) {
+    showToast(`✓ ${sent} envoyé(s), ⚠️ ${errors} erreur(s)`, 'error');
+  } else {
+    showToast(`✓ Email envoyé à ${sent} agent(s) — ${unassigned.length} créneau(x) libre(s)`);
+  }
+}
+
 
 // ── Email : demande de disponibilités (envoyé le 1er du mois) ──────────────
 async function sendDispoRequests() {
@@ -3471,6 +3552,7 @@ function renderPlanning() {
           autoOpenWeeks(days, weeks);
           showToast('Semaines ouvertes automatiquement ✓');
         }}, '🔓 Ouvrir auto'),
+        el('button',{class:'btn btn-secondary',style:{fontSize:'12px'},onClick:()=>sendUnassignedShifts(days)}, '📧 Créneaux libres'),
         el('button',{class:'btn btn-secondary',onClick:exportCSV},'⬇ '+t('export'))
       )
     ),
