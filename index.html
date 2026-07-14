@@ -760,14 +760,12 @@ async function sendUnassignedShifts(days) {
   const brevoKey = getBrevoKey();
   if (!brevoKey) { showToast('Clé Brevo manquante — configurez-la dans Emails & Suivi', 'error'); return; }
 
-  // Get next week's dates (Mon → Sun)
+  // Get next 7 days from today
   const today = new Date();
-  const dayOfWeek = today.getDay(); // 0=sun, 1=mon...
-  const daysUntilNextMon = dayOfWeek === 0 ? 1 : 8 - dayOfWeek;
   const nextMon = new Date(today);
-  nextMon.setDate(today.getDate() + daysUntilNextMon);
-  const nextSun = new Date(nextMon);
-  nextSun.setDate(nextMon.getDate() + 6);
+  nextMon.setDate(today.getDate() + 1); // start tomorrow
+  const nextSun = new Date(today);
+  nextSun.setDate(today.getDate() + 7); // end in 7 days
 
   const toISO_d = d => d.toISOString().split('T')[0];
   const startStr = toISO_d(nextMon);
