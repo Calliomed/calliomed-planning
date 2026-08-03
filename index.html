@@ -849,7 +849,6 @@ async function sendDispoRequests() {
   let sent = 0, errors = 0;
 
   for (const ag of agents) {
-    if (onlyIds && !onlyIds.includes(ag.id)) continue;
     const contact = agentEmail(ag.id);
     if (!contact.email) continue;
     const html = `
