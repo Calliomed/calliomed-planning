@@ -1168,7 +1168,7 @@ async function loadAllData() {
 
     // Auto-refresh every 30s
     if (!STATE._refreshTimer) {
-      STATE._refreshTimer = STATE._refreshTimer = setInterval(silentRefresh, 120000); // 2 minutes instead of 30s // 30 sec
+      STATE._refreshTimer = STATE._refreshTimer = setInterval(silentRefresh, 300000); // 5 minutes
     }
   } catch(e) {
     STATE.loading = false;
@@ -1178,9 +1178,9 @@ async function loadAllData() {
 }
 
 async function silentRefresh() {
-  // Only pause refresh when a modal is open (admin actively editing)
   if (STATE.modal !== null) return;
   try {
+    // Always reload assignments and requests
     const assigns = await sbGet('assignments', 'order=date,shift_id');
     STATE.assignments = {};
     assigns.forEach(row => {
@@ -1194,26 +1194,28 @@ async function silentRefresh() {
       date: r.date, shiftId: r.shift_id,
       reason: r.reason, status: r.status
     }));
-    const avail = await sbGet('availability', 'order=id.asc&limit=50000');
-    // Only overwrite availability if agent has no pending unsaved edits
-    // Otherwise the refresh would erase their in-progress work
-    // Merge availability: always load from Supabase but preserve recent local edits
-    const savedKeys = new Set(Object.keys(STATE.savedLocally || {}));
-    STATE.availability = {};
-    avail.forEach(row => {
-      const k = `${row.agent_id}_${row.date}_${row.shift_id}`;
-      STATE.availability[k] = {dispo: row.dispo, doublon: row.doublon};
-    });
-    // Re-apply any locally saved values that Supabase may not have persisted
-    if (STATE.savedLocally) {
-      Object.entries(STATE.savedLocally).forEach(([k, v]) => {
-        STATE.availability[k] = v;
+
+    // NEVER reload availability if agent has unsaved edits in progress
+    const hasPendingEdits = Object.keys(STATE.dispoEdits || {}).length > 0;
+    if (!hasPendingEdits) {
+      const avail = await sbGetRange('availability', 0, 5999);
+      STATE.availability = {};
+      avail.forEach(row => {
+        const k = `${row.agent_id}_${row.date}_${row.shift_id}`;
+        STATE.availability[k] = {dispo: row.dispo, doublon: row.doublon};
       });
+      // Re-apply locally saved values (in case Supabase is slow)
+      if (STATE.savedLocally) {
+        Object.entries(STATE.savedLocally).forEach(([k, v]) => {
+          STATE.availability[k] = v;
+        });
+      }
+      rebuildAvailData();
+      updateNightCounts();
     }
-    rebuildAvailData();
-    updateNightCounts();
-    // Show notification if new pending requests appeared
-    const newPending = STATE.requests.filter(r=>r.status==='pending').length;
+
+    // Update page title with pending requests count
+    const newPending = STATE.requests.filter(r => r.status === 'pending').length;
     if (newPending > 0) {
       document.title = `(${newPending}) Calliomed — Planning v5.3`;
     } else {
@@ -1223,6 +1225,7 @@ async function silentRefresh() {
     setTimeout(() => { STATE.syncing = false; render(); }, 1500);
   } catch(e) { /* silent */ }
 }
+
 
 // Rebuild the availData.slots structure that all rendering functions expect
 function extractDateFromKey(k) {
