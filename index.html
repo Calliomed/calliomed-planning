@@ -621,6 +621,7 @@ const STATE = {
   supabaseKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZrbGdtenNudHZmd2l5eG9paWRkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE3NzkyMDUsImV4cCI6MjA5NzM1NTIwNX0.-1kZZ6BqC1NFtkb3BBSla8O46NdBTZGIr1KNaxfKpf0',
   // Session
   lang: localStorage.getItem('sb_lang') || 'fr',
+  team: localStorage.getItem('sb_team') || null, // 'fr' or 'nl' for admin
   user: null,        // agent_id (short key)
   role: 'agent',
   page: 'setup',     // setup | login | planning | myshifts | available | nightcount | requests | availability | import
@@ -1486,7 +1487,8 @@ function renderAgents() {
       await sbUpsert('agents', [{
         id, display_name: form.name.trim(),
         role: form.role, email: form.email.trim() || null,
-        pwd_hash: hash, no_night: false
+        pwd_hash: hash, no_night: false,
+        team: STATE.team || 'fr'
       }], 'id');
       // Refresh agents list
       const agents = await sbGet('agents', 'order=display_name');
@@ -1529,7 +1531,13 @@ function renderAgents() {
     }
   }
 
-  const agents = [...STATE.agents].sort((a,b) => a.display_name.localeCompare(b.display_name));
+  const agents = [...STATE.agents]
+    .filter(a => {
+      if (a.role === 'admin') return true;
+      if (a.team === 'both') return true;
+      return (a.team || 'fr') === (STATE.team || 'fr');
+    })
+    .sort((a,b) => a.display_name.localeCompare(b.display_name));
 
   return el('div', {},
     el('div', {class:'page-header'},
@@ -1548,6 +1556,7 @@ function renderAgents() {
             el('th', {style:{padding:'8px 10px',textAlign:'left',color:'var(--text3)',fontSize:'11px',textTransform:'uppercase',letterSpacing:'0.5px'}}, 'Nom'),
             el('th', {style:{padding:'8px 10px',textAlign:'left',color:'var(--text3)',fontSize:'11px',textTransform:'uppercase',letterSpacing:'0.5px'}}, 'Identifiant'),
             el('th', {style:{padding:'8px 10px',textAlign:'left',color:'var(--text3)',fontSize:'11px',textTransform:'uppercase',letterSpacing:'0.5px'}}, 'Rôle'),
+            el('th', {style:{padding:'8px 10px',textAlign:'left',color:'var(--text3)',fontSize:'11px',textTransform:'uppercase',letterSpacing:'0.5px'}}, 'Équipe'),
             el('th', {style:{padding:'8px 10px',textAlign:'left',color:'var(--text3)',fontSize:'11px',textTransform:'uppercase',letterSpacing:'0.5px'}}, 'Email'),
             el('th', {style:{padding:'8px 10px',textAlign:'left',color:'var(--text3)',fontSize:'11px',textTransform:'uppercase',letterSpacing:'0.5px'}}, 'Nuits'),
             el('th', {style:{padding:'8px 10px'}},'')
@@ -1581,6 +1590,24 @@ function renderAgents() {
                   : AGENT_EMAILS[ag.id]?.email
                     ? AGENT_EMAILS[ag.id].email
                     : el('span',{style:{color:'var(--red)',fontStyle:'italic'}}, '⚠️ pas email')
+              ),
+              el('td', {style:{padding:'10px 10px',textAlign:'center'}},
+                el('span', {
+                  style:{
+                    fontSize:'11px', padding:'2px 8px', borderRadius:'99px', fontWeight:'600',
+                    background: ag.team==='both' ? '#fef3c7' : ag.team==='nl' ? '#fff7ed' : '#eff6ff',
+                    color: ag.team==='both' ? '#92400e' : ag.team==='nl' ? '#c2410c' : '#1d4ed8',
+                    cursor: isMe ? 'default' : 'pointer'
+                  },
+                  title: 'Cliquer pour changer',
+                  onClick: isMe ? null : async ()=>{
+                    const t = ag.team || 'fr';
+                    const next = t==='fr' ? 'nl' : t==='nl' ? 'both' : 'fr';
+                    await sbPatch('agents', 'id=eq.'+ag.id, {team: next});
+                    ag.team = next;
+                    render();
+                  }
+                }, (ag.team==='both') ? '🌐 FR+NL' : (ag.team==='nl') ? '🇧🇪 NL' : '🇫🇷 FR')
               ),
               el('td', {style:{padding:'10px 10px',textAlign:'center'}},
                 ag.no_night
@@ -2489,6 +2516,25 @@ async function loadDispoUpdates() {
   } catch(e) {}
 }
 
+// Team filtering helper
+function teamAgents() {
+  if (!STATE.team) return STATE.agents;
+  return STATE.agents.filter(a => {
+    if (a.role === 'admin') return false;
+    if (a.team === 'both') return true;
+    return (a.team || 'fr') === STATE.team;
+  });
+}
+
+// Check if a slot is blocked by the OTHER team's assignment (for bilingual agents)
+function isBlockedByOtherTeam(dateStr, shiftId, agentId) {
+  const agent = STATE.agents.find(a => a.id === agentId);
+  if (!agent || agent.team !== 'both') return false;
+  // Check if assigned in other team's planning for same slot
+  const assigned = STATE.assignments[`${dateStr}_${shiftId}`] || [];
+  return assigned.some(a => a.agent === agentId);
+}
+
 // ===================== HELPERS =====================
 function t(key) { return (TRANSLATIONS[STATE.lang] || TRANSLATIONS.fr)[key] || key; }
 
@@ -3157,6 +3203,21 @@ function renderSidebar() {
     ),
     el('nav', {class:'sidebar-nav'},
       isAdmin ? el('div', {class:'nav-section'}, t('admin')) : null,
+      isAdmin ? el('div', {
+        style:{margin:'4px 8px 8px', padding:'8px 12px', borderRadius:'8px',
+          background: STATE.team==='nl' ? '#fff7ed' : '#eff6ff',
+          border: '1px solid ' + (STATE.team==='nl' ? '#fed7aa' : '#bfdbfe'),
+          cursor:'pointer', display:'flex', alignItems:'center', gap:'8px'},
+        onClick:()=>{ STATE.page='teamselect'; render(); }
+      },
+        el('span', {style:{fontSize:'20px'}}, STATE.team==='nl' ? '🇧🇪' : '🇫🇷'),
+        el('div', {},
+          el('div', {style:{fontSize:'12px', fontWeight:'700',
+            color: STATE.team==='nl' ? '#c2410c' : '#1d4ed8'}},
+            STATE.team==='nl' ? 'Team NL' : 'Equipe FR'),
+          el('div', {style:{fontSize:'10px', color:'var(--text2)'}}, "Changer d'equipe")
+        )
+      ) : null,
       isAdmin ? navBtn('planning',  '📅', t('planning')) : null,
       isAdmin ? navBtn('requests',  '🔔', t('requests') + (STATE.requests.filter(r=>r.status==='pending').length > 0 ? ` (${STATE.requests.filter(r=>r.status==='pending').length})` : '')) : null,
       isAdmin ? navBtn('agents',    '👥', 'Gestion agents') : null,
@@ -3221,8 +3282,19 @@ function renderLogin() {
     STATE.loginError = '';
     STATE.user = selectedUser;
     STATE.role = agentObj.role || 'agent';
+    STATE.userTeam = agentObj.team || 'fr'; // agent's own team
     localStorage.setItem('sb_user', selectedUser);
-    STATE.page = STATE.role === 'admin' ? 'planning' : 'myshifts';
+    if (STATE.role === 'admin') {
+      // Admin selects team after login
+      STATE.page = 'teamselect';
+      // Restore last used team if available
+      const lastTeam = localStorage.getItem('sb_team');
+      if (lastTeam) STATE.team = lastTeam;
+    } else {
+      // Agent: use their own team
+      STATE.team = agentObj.team || 'fr';
+      STATE.page = 'myshifts';
+    }
     render();
   }
 
@@ -4291,6 +4363,56 @@ function renderChangePassword() {
 }
 
 // ===================== MAIN RENDER =====================
+function renderTeamSelect() {
+  return el('div', {style:{
+    display:'flex', flexDirection:'column', alignItems:'center',
+    justifyContent:'center', minHeight:'100vh',
+    background:'var(--bg)', gap:'24px'
+  }},
+    el('div', {style:{textAlign:'center', marginBottom:'8px'}},
+      el('h1', {style:{fontSize:'28px', color:'var(--primary)', margin:'0'}}, '🏥 Calliomed'),
+      el('p', {style:{color:'var(--text2)', margin:'8px 0 0'}}, 'Choisissez le planning à gérer')
+    ),
+    el('div', {style:{display:'flex', gap:'20px', flexWrap:'wrap', justifyContent:'center'}},
+      el('div', {
+        onClick:()=>{ STATE.team='fr'; localStorage.setItem('sb_team','fr'); STATE.page='planning'; render(); },
+        style:{
+          cursor:'pointer', padding:'32px 48px', borderRadius:'16px',
+          background: STATE.team==='fr' ? 'var(--primary)' : 'var(--card)',
+          border:'2px solid ' + (STATE.team==='fr' ? 'var(--primary)' : 'var(--border)'),
+          color: STATE.team==='fr' ? '#fff' : 'var(--text)',
+          textAlign:'center', transition:'all 0.2s',
+          boxShadow:'0 4px 12px rgba(0,0,0,0.1)'
+        }
+      },
+        el('div', {style:{fontSize:'48px', marginBottom:'12px'}}, '🇫🇷'),
+        el('div', {style:{fontSize:'18px', fontWeight:'700'}}, 'Équipe FR'),
+        el('div', {style:{fontSize:'13px', opacity:'0.8', marginTop:'4px'}}, 'Planning francophone')
+      ),
+      el('div', {
+        onClick:()=>{ STATE.team='nl'; localStorage.setItem('sb_team','nl'); STATE.page='planning'; render(); },
+        style:{
+          cursor:'pointer', padding:'32px 48px', borderRadius:'16px',
+          background: STATE.team==='nl' ? '#f97316' : 'var(--card)',
+          border:'2px solid ' + (STATE.team==='nl' ? '#f97316' : 'var(--border)'),
+          color: STATE.team==='nl' ? '#fff' : 'var(--text)',
+          textAlign:'center', transition:'all 0.2s',
+          boxShadow:'0 4px 12px rgba(0,0,0,0.1)'
+        }
+      },
+        el('div', {style:{fontSize:'48px', marginBottom:'12px'}}, '🇧🇪'),
+        el('div', {style:{fontSize:'18px', fontWeight:'700'}}, 'Team NL'),
+        el('div', {style:{fontSize:'13px', opacity:'0.8', marginTop:'4px'}}, 'Nederlandstalig planning')
+      )
+    ),
+    el('button', {
+      class:'btn btn-secondary',
+      onClick:()=>{ STATE.user=null; STATE.role=null; STATE.team=null; localStorage.removeItem('sb_user'); localStorage.removeItem('sb_team'); render(); }
+    }, '← Déconnexion')
+  );
+}
+
+
 function render() {
   const root = document.getElementById('app');
   root.innerHTML = '';
