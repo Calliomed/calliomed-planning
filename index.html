@@ -3285,11 +3285,10 @@ function renderLogin() {
     STATE.userTeam = agentObj.team || 'fr'; // agent's own team
     localStorage.setItem('sb_user', selectedUser);
     if (STATE.role === 'admin') {
-      // Admin selects team after login
-      STATE.page = 'teamselect';
-      // Restore last used team if available
-      const lastTeam = localStorage.getItem('sb_team');
-      if (lastTeam) STATE.team = lastTeam;
+      // Restore last used team or default to 'fr'
+      STATE.team = localStorage.getItem('sb_team') || 'fr';
+      localStorage.setItem('sb_team', STATE.team);
+      STATE.page = 'planning';
     } else {
       // Agent: use their own team
       STATE.team = agentObj.team || 'fr';
@@ -4417,11 +4416,14 @@ function render() {
   const root = document.getElementById('app');
   root.innerHTML = '';
   try {
-  if (STATE.page === 'setup')   { root.appendChild(renderSetup()); return; }
-  if (STATE.page === 'loading') { root.appendChild(renderLoadingScreen()); return; }
-  if (STATE.page === 'login')   { root.appendChild(renderLogin()); return; }
+  if (STATE.page === 'setup')      { root.appendChild(renderSetup()); return; }
+  if (STATE.page === 'loading')    { root.appendChild(renderLoadingScreen()); return; }
+  if (STATE.page === 'login')      { root.appendChild(renderLogin()); return; }
+  if (STATE.page === 'teamselect') { root.appendChild(renderTeamSelect()); return; }
 
   const isAdmin = STATE.role === 'admin';
+  // Ensure page has a valid default
+  if (!STATE.page) STATE.page = isAdmin ? 'planning' : 'myshifts';
   const pendingCount = STATE.requests.filter(r=>r.status==='pending').length;
 
   // Mobile bottom navigation
@@ -4470,7 +4472,7 @@ function render() {
       STATE.page === 'emails'     ? renderEmailsAdmin() :
       STATE.page === 'import'     ? renderImport() :
       STATE.page === 'changepwd'  ? renderChangePassword() :
-      el('div', {}, 'Page inconnue')
+      renderPlanning()
     )
   );
 
