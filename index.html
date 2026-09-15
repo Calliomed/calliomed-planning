@@ -1620,11 +1620,22 @@ function renderAgents() {
                     : el('span',{style:{fontSize:'11px',color:'var(--text3)'}}, '0')
               ),
               el('td', {style:{padding:'10px 10px',textAlign:'right'}},
-                !isMe ? el('button', {
-                  class:'btn btn-danger',
-                  style:{fontSize:'11px',padding:'3px 10px'},
-                  onClick: () => removeAgent(ag.id)
-                }, '🗑️ Retirer') : null
+                el('div', {style:{display:'flex',gap:'6px',justifyContent:'flex-end'}},
+                  !isMe ? el('button', {
+                    class:'btn btn-secondary',
+                    style:{fontSize:'11px',padding:'3px 10px'},
+                    onClick: async ()=>{
+                      const np = prompt('Nouveau MDP pour ' + ag.display_name + ' (3 car. min) :');
+                      if (np && np.length >= 3) { await adminResetPassword(ag.id, np); showToast('MDP mis a jour'); }
+                      else if (np !== null) showToast('Trop court', 'error');
+                    }
+                  }, '🔑 MDP') : null,
+                  !isMe ? el('button', {
+                    class:'btn btn-danger',
+                    style:{fontSize:'11px',padding:'3px 10px'},
+                    onClick: () => removeAgent(ag.id)
+                  }, '🗑️ Retirer') : null
+                )
               )
             );
           })
@@ -3236,6 +3247,7 @@ function renderSidebar() {
       isAdmin ? navBtn('emails',    '✉️',  'Emails & suivi') : null,
       isAdmin ? navBtn('nightcount','🌙', t('nightCount')) : null,
       isAdmin ? navBtn('import',    '📥', t('import')) : null,
+      isAdmin ? navBtn('changepwd', '🔑', 'Changer mon mot de passe') : null,
       
       !isAdmin ? el('div', {class:'nav-section'}, t('agent')) : null,
       !isAdmin ? navBtn('myshifts',  '📋', t('myShifts')) : null,
