@@ -2974,25 +2974,32 @@ function renderModal() {
     });
 
     return el('div', {class:'modal-overlay', onClick: e => { if(e.target===e.currentTarget){STATE.modal=null;render();} }},
-      el('div', {class:'modal', style:{width:'520px'}},
-        el('div', {class:'modal-title'}, `${t('assignAgent')} — ${formatDate(m.date)} ${shiftLabel(m.shiftId)}`),
+      el('div', {class:'modal', style:{width:'560px',maxHeight:'90vh',display:'flex',flexDirection:'column',padding:'0'}},
+        // Header fixe
+        el('div', {style:{padding:'20px 20px 12px',borderBottom:'1px solid var(--border)'}},
+          el('div', {class:'modal-title', style:{margin:'0'}}, `${t('assignAgent')} — ${formatDate(m.date)} ${shiftLabel(m.shiftId)}`)
+        ),
 
-        // ── Main shift section ────────────────────────────────────────────
-        el('div',{style:{fontSize:'12px',fontWeight:'600',color:'var(--text2)',marginBottom:'6px',marginTop:'4px'}},
-          '👤 Shift principal'),
-        el('div', {class:'agent-grid'}, ...sortedAgents.map(ag => agentRow(ag, 'main'))),
+        // Zone scrollable
+        el('div', {style:{flex:'1',overflowY:'auto',padding:'12px 20px'}},
+          // ── Main shift section ──────────────────────────────────────────
+          el('div',{style:{fontSize:'12px',fontWeight:'600',color:'var(--text2)',marginBottom:'6px',marginTop:'4px'}},
+            '👤 Shift principal'),
+          el('div', {class:'agent-grid'}, ...sortedAgents.map(ag => agentRow(ag, 'main'))),
 
-        // ── Doublon section (S3 only) ─────────────────────────────────────
-        isS3 ? el('div',{},
-          el('div',{style:{
-            fontSize:'12px',fontWeight:'600',color:'#6d28d9',
-            marginBottom:'6px',marginTop:'14px',
-            borderTop:'1px solid #ede9fe',paddingTop:'10px'
-          }}, '↻ Doublon 19h–21h (indépendant du shift principal)'),
-          el('div', {class:'agent-grid'}, ...sortedAgents.map(ag => agentRow(ag, 'doublon')))
-        ) : null,
+          // ── Doublon section (S3 only) ───────────────────────────────────
+          isS3 ? el('div',{},
+            el('div',{style:{
+              fontSize:'12px',fontWeight:'600',color:'#6d28d9',
+              marginBottom:'6px',marginTop:'14px',
+              borderTop:'1px solid #ede9fe',paddingTop:'10px'
+            }}, '↻ Doublon 19h–21h (indépendant du shift principal)'),
+            el('div', {class:'agent-grid'}, ...sortedAgents.map(ag => agentRow(ag, 'doublon')))
+          ) : null
+        ),
 
-        el('div', {class:'modal-footer'},
+        // Footer fixe
+        el('div', {class:'modal-footer', style:{borderTop:'1px solid var(--border)',margin:'0',padding:'12px 20px'}},
           el('button', {class:'btn btn-secondary', onClick:()=>{STATE.modal=null;render();}}, t('close')),
           el('button', {class:'btn btn-primary', onClick:()=>{STATE.modal=null;showToast(t('shiftAssigned'));render();}}, t('save'))
         )
